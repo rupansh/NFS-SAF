@@ -16,6 +16,7 @@ package dev.nfssaf.core
     companion object { val Root = RemotePath("/") }
 }
 @JvmInline value class FileName(val value: String) { init { Paths.name(value) } }
+enum class ReadPolicy { Direct, ReadAhead }
 enum class Protocol(val wire: Int, val label: String) { V3(3, "NFS 3"), V4(4, "NFS 4.0"), V42(42, "NFS 4.2") }
 
 sealed interface Node {
@@ -34,10 +35,12 @@ data object ReadAccess : Readable
 data object WriteAccess : Writable
 data object ReadWriteAccess : Readable, Writable
 
+data class WriteReceipt(val count: Int, val endOffset: Long)
+
 /** Implementations own raw native handles; callers only receive capability-typed handles. */
 interface FileIo : AutoCloseable {
     fun read(offset: Long, size: Int, data: ByteArray): Int
-    fun write(offset: Long, size: Int, data: ByteArray): Int
+    fun write(offset: Long, size: Int, data: ByteArray): WriteReceipt
     fun sync()
 }
 class FileHandle<A : Access> internal constructor(private val io: FileIo, initialSize: Long, private val append: Boolean = false) : AutoCloseable {
@@ -58,10 +61,10 @@ class FileHandle<A : Access> internal constructor(private val io: FileIo, initia
         if (size == 0) return 0
         val position = if (append) current.size else offset
         require(position <= Long.MAX_VALUE - size)
-        val count = io.write(position, size, data)
-        if (count != size) throw NfsException(5, "Backend returned a short write")
-        state = State.Open(maxOf(current.size, position + count))
-        return count
+        val receipt = io.write(position, size, data)
+        if (receipt.count != size || receipt.endOffset < size || (!append && receipt.endOffset != position + size)) throw NfsException(5, "Backend returned an invalid write receipt")
+        state = State.Open(maxOf(current.size, receipt.endOffset))
+        return receipt.count
     }
     @Synchronized internal fun flush() { live(); io.sync() }
     @Synchronized override fun close() {

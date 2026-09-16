@@ -25,6 +25,11 @@ int main(int argc, char** argv) {
         if (argc > 1) {
             if (argc < 4) throw std::runtime_error("usage: storage_tests HOST EXPORT VERSION");
             Config c; c.host = argv[1]; c.export_path = argv[2]; c.version = std::stoi(argv[3]); c.uid = 1000; c.gid = 1000;
+            if(const char* port=getenv("NFS_TEST_PORT")) c.port=std::stoi(port);
+            if(const char* timeout=getenv("NFS_TEST_TIMEOUT_MS")) c.timeout_ms=std::stoi(timeout);
+            if(const char* uid=getenv("NFS_TEST_UID")) c.uid=std::stoul(uid);
+            if(const char* gid=getenv("NFS_TEST_GID")) c.gid=std::stoul(gid);
+            if(getenv("NFS_TEST_GROUPS")) c.groups={17,42,4000000001U};
             Session s(c);
             const std::string dir = "/.nfssaf-test-" + std::to_string(getpid()) + "-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
             s.mkdir(dir);
@@ -47,6 +52,8 @@ int main(int argc, char** argv) {
                 expect(s.read(f, read.data(), 1, large) == 1 && read[0]=='Z', "64-bit seek");
                 s.close(f);
                 error(EEXIST, [&] { s.open(path, 3, true); });
+                error(ESTALE, [&] { s.open(path, 4, false, Identity{0,0}); });
+                expect(s.stat(path).size==large+1,"Identity mismatch must not truncate");
                 auto listing = s.list(dir); expect(listing.size() == 1 && listing[0].size == large + 1, "Listing metadata");
                 auto other = s.open(dir + "/other", 3, true); s.close(other);
                 error(EEXIST, [&] { s.rename_file(path, dir + "/other"); });

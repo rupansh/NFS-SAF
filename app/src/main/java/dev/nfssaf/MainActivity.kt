@@ -48,10 +48,16 @@ class MainActivity : ComponentActivity() {
     val services=remember { Services.get(context) }
     val scope=rememberCoroutineScope()
     var shares by remember { mutableStateOf(services.shares.all()) }
-    var editing by remember { mutableStateOf<Share?>(null) }
+    var editingId by rememberSaveable { mutableStateOf<String?>(null) }
+    val editing=shares.firstOrNull { it.id.value==editingId }
     var form by rememberSaveable { mutableStateOf(false) }
     var removing by remember { mutableStateOf<Share?>(null) }
     var closeError by remember { mutableStateOf(services.errors.getString("last",null)) }
+    DisposableEffect(services) {
+        val listener=android.content.SharedPreferences.OnSharedPreferenceChangeListener { prefs,key -> if(key=="last") closeError=prefs.getString("last",null) }
+        services.errors.registerOnSharedPreferenceChangeListener(listener)
+        onDispose { services.errors.unregisterOnSharedPreferenceChangeListener(listener) }
+    }
     val snackbar=remember { SnackbarHostState() }
     val serviceState by ConnectionService.status.collectAsState()
     val permission=rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
@@ -63,24 +69,21 @@ class MainActivity : ComponentActivity() {
         else ConnectionService.start(context)
     }
     if(form) {
+        androidx.activity.compose.BackHandler { form=false }
         ConnectionForm(editing,onBack={ form=false },onSave={ share ->
-            scope.launch {
-                try {
-                    withContext(Dispatchers.IO) {
-                        services.shares.save(share)
-                        editing?.let { old -> services.shares.remove(old.id); services.backend.invalidate(old); services.catalog.forget(old.id,RemotePath.Root) }
-                    }
-                    shares=services.shares.all(); form=false
-                    startConnections()
-                    snackbar.showSnackbar("${share.name} is available in the Android file picker")
-                } catch(e: Exception) { snackbar.showSnackbar(e.message ?: "Could not save connection") }
+            withContext(Dispatchers.IO) {
+                services.shares.replace(editing?.id,share)
+                editing?.let { old -> services.backend.invalidate(old); services.catalog.forget(old.id,RemotePath.Root) }
             }
+            shares=services.shares.all(); form=false
+            startConnections()
+            scope.launch { snackbar.showSnackbar("Saved ${share.name}") }
         })
         return
     }
     Scaffold(topBar={ TopAppBar(title={ Text("NFS SAF",fontWeight=FontWeight.SemiBold) }) },
         snackbarHost={ SnackbarHost(snackbar) },
-        floatingActionButton={ ExtendedFloatingActionButton(onClick={ editing=null; form=true }) { Text("+  Add connection") } }
+        floatingActionButton={ ExtendedFloatingActionButton(onClick={ editingId=null; form=true }) { Text("+  Add connection") } }
     ) { padding ->
         Column(Modifier.padding(padding).fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal=24.dp).padding(bottom=100.dp),verticalArrangement=Arrangement.spacedBy(20.dp)) {
             Text("Your server.\nIn every file picker.",style=MaterialTheme.typography.headlineLarge,fontWeight=FontWeight.SemiBold)
@@ -137,7 +140,7 @@ class MainActivity : ComponentActivity() {
                         }
                         Text("UID ${share.uid} · GID ${share.gid}",style=MaterialTheme.typography.bodySmall)
                         Row {
-                            TextButton(onClick={ editing=share; form=true }) { Text("Edit") }
+                            TextButton(onClick={ editingId=share.id.value; form=true }) { Text("Edit") }
                             TextButton(onClick={ removing=share }) { Text("Remove",color=MaterialTheme.colorScheme.error) }
                         }
                     }
@@ -151,8 +154,10 @@ class MainActivity : ComponentActivity() {
     }) { Text("Remove") } },dismissButton={ TextButton(onClick={ removing=null }) { Text("Cancel") } }) }
 }
 
+private enum class EditorOperation { Idle, Testing, Saving }
+
 @OptIn(ExperimentalMaterial3Api::class)
-@Composable private fun ConnectionForm(existing: Share?, onBack: () -> Unit, onSave: (Share) -> Unit) {
+@Composable private fun ConnectionForm(existing: Share?, onBack: () -> Unit, onSave: suspend (Share) -> Unit) {
     var name by rememberSaveable { mutableStateOf(existing?.name ?: "") }
     var host by rememberSaveable { mutableStateOf(existing?.host ?: "") }
     var path by rememberSaveable { mutableStateOf(existing?.export?.value ?: "/") }
@@ -161,14 +166,16 @@ class MainActivity : ComponentActivity() {
     var groups by rememberSaveable { mutableStateOf(existing?.groups?.joinToString(",") ?: "") }
     var port by rememberSaveable { mutableStateOf(existing?.port?.toString() ?: "2049") }
     var timeout by rememberSaveable { mutableStateOf(existing?.timeoutSeconds?.toString() ?: "10") }
-    var protocol by remember { mutableStateOf(existing?.protocol ?: Protocol.V42) }
+    var protocol by rememberSaveable { mutableStateOf(existing?.protocol ?: Protocol.V42) }
     var readOnly by rememberSaveable { mutableStateOf(existing?.readOnly ?: false) }
+    var readAhead by rememberSaveable { mutableStateOf((existing?.readPolicy ?: ReadPolicy.ReadAhead)==ReadPolicy.ReadAhead) }
     var advanced by rememberSaveable { mutableStateOf(false) }
     var status by remember { mutableStateOf<ConnectionStatus>(ConnectionStatus.Untested) }
     var error by remember { mutableStateOf<String?>(null) }
     val scope=rememberCoroutineScope()
-    val busy=status is ConnectionStatus.Connecting
-    fun config() = Share(name=name.trim(),host=host.trim().removePrefix("[").removeSuffix("]"),export=RemotePath(path.trim()),protocol=protocol,port=port.toIntOrNull() ?: error("Port must be a number"),uid=uid.toLongOrNull() ?: error("UID must be a number"),gid=gid.toLongOrNull() ?: error("GID must be a number"),groups=if(groups.isBlank()) emptyList() else groups.split(',').map { it.trim().toLongOrNull() ?: error("Groups must be comma-separated numbers") },readOnly=readOnly,timeoutSeconds=timeout.toIntOrNull() ?: error("Timeout must be a number")).validate()
+    var operation by remember { mutableStateOf(EditorOperation.Idle) }
+    val busy=operation!=EditorOperation.Idle
+    fun config() = Share(name=name.trim(),host=host.trim().removePrefix("[").removeSuffix("]"),export=RemotePath(path.trim()),protocol=protocol,port=port.toIntOrNull() ?: error("Port must be a number"),uid=uid.toLongOrNull() ?: error("UID must be a number"),gid=gid.toLongOrNull() ?: error("GID must be a number"),groups=if(groups.isBlank()) emptyList() else groups.split(',').map { it.trim().toLongOrNull() ?: error("Groups must be comma-separated numbers") },readOnly=readOnly,timeoutSeconds=timeout.toIntOrNull() ?: error("Timeout must be a number"),readPolicy=if(readAhead) ReadPolicy.ReadAhead else ReadPolicy.Direct).validate()
     Scaffold(topBar={ TopAppBar(title={ Text(if(existing==null) "Add connection" else "Edit connection") },navigationIcon={ TextButton(onClick=onBack,enabled=!busy) { Text("Back") } }) }) { padding ->
         Column(Modifier.padding(padding).fillMaxSize().verticalScroll(rememberScrollState()).imePadding().padding(24.dp),verticalArrangement=Arrangement.spacedBy(16.dp)) {
             Text("Connect to your NFS server",style=MaterialTheme.typography.headlineSmall)
@@ -189,6 +196,10 @@ class MainActivity : ComponentActivity() {
             }
             TextButton(onClick={ advanced=!advanced }) { Text(if(advanced) "Hide advanced settings" else "Advanced settings") }
             if(advanced) {
+                Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) { Text("Read ahead",style=MaterialTheme.typography.titleMedium); Text("Faster sequential reads. Turn off when another device edits the same open file; prefetched data is held for up to 250 ms.",style=MaterialTheme.typography.bodySmall) }
+                    Switch(checked=readAhead,onCheckedChange={ readAhead=it },enabled=!busy)
+                }
                 field(groups,{groups=it},"Supplementary groups","Up to 16 numeric GIDs, separated by commas")
                 field(port,{port=it},"NFS port",numeric=true)
                 field(timeout,{timeout=it},"Request timeout (seconds)","3–30 seconds",true)
@@ -204,14 +215,26 @@ class MainActivity : ComponentActivity() {
             error?.let { Text(it,color=MaterialTheme.colorScheme.error) }
             OutlinedButton(onClick={
                 val share=try { config() } catch(e: Exception) { error=e.message; return@OutlinedButton }
+                operation=EditorOperation.Testing
                 status=ConnectionStatus.Connecting
                 scope.launch {
                     val start=android.os.SystemClock.elapsedRealtime()
                     status=try { withContext(Dispatchers.IO) { NativeSession(share).use { it.stat(RemotePath.Root) } }; ConnectionStatus.Connected(android.os.SystemClock.elapsedRealtime()-start) }
+                    catch(e: kotlinx.coroutines.CancellationException) { throw e }
                     catch(e: Exception) { ConnectionStatus.Failed(ConnectionProblem.from(e).message) }
+                    finally { operation=EditorOperation.Idle }
                 }
             },enabled=!busy,modifier=Modifier.fillMaxWidth()) { Text("Test connection") }
-            Button(onClick={ try { onSave(config()) } catch(e: Exception) { error=e.message } },enabled=!busy,modifier=Modifier.fillMaxWidth()) { Text("Save & connect") }
+            Button(onClick={
+                val share=try { config() } catch(e: Exception) { error=e.message; return@Button }
+                operation=EditorOperation.Saving
+                scope.launch {
+                    try { onSave(share) }
+                    catch(e: kotlinx.coroutines.CancellationException) { throw e }
+                    catch(e: Exception) { error=e.message ?: "Could not save connection" }
+                    finally { operation=EditorOperation.Idle }
+                }
+            },enabled=!busy,modifier=Modifier.fillMaxWidth()) { Text(if(operation==EditorOperation.Saving) "Saving…" else "Save & connect") }
         }
     }
 }

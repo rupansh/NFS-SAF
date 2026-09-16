@@ -1,0 +1,30 @@
+# The pinned libnfs decodes FSID with an unaligned uint64_t pointer cast. Keep the
+# upstream checkout pristine and generate the single corrected translation unit.
+set(nfs_v4_original "${CMAKE_CURRENT_SOURCE_DIR}/../vendor/libnfs/lib/nfs_v4.c")
+file(READ "${nfs_v4_original}" nfs_v4_source)
+set(unsafe_fsid "st->nfs_dev = ((uint64_t *)(void *)buf)[0] ^ ((uint64_t *)(void *)buf)[1];")
+string(FIND "${nfs_v4_source}" "${unsafe_fsid}" fsid_position)
+if(fsid_position EQUAL -1)
+  message(FATAL_ERROR "Recheck the FSID alignment fix after updating libnfs")
+endif()
+string(REPLACE "${unsafe_fsid}" "uint64_t fsid_parts[2];\n                memcpy(fsid_parts, buf, sizeof(fsid_parts));\n                st->nfs_dev = fsid_parts[0] ^ fsid_parts[1];" nfs_v4_source "${nfs_v4_source}")
+set(fixed_v4 "${CMAKE_CURRENT_BINARY_DIR}/libnfs-nfs_v4.c")
+file(WRITE "${fixed_v4}.tmp" "${nfs_v4_source}")
+configure_file("${fixed_v4}.tmp" "${fixed_v4}" COPYONLY)
+get_target_property(nfs_sources nfs SOURCES)
+set_property(TARGET nfs PROPERTY SOURCES "")
+foreach(source IN LISTS nfs_sources)
+  if(source STREQUAL "nfs_v4.c")
+    target_sources(nfs PRIVATE "${fixed_v4}")
+  elseif(IS_ABSOLUTE "${source}")
+    target_sources(nfs PRIVATE "${source}")
+  else()
+    target_sources(nfs PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../vendor/libnfs/lib/${source}")
+  endif()
+endforeach()
+if(CMAKE_C_COMPILER_ID MATCHES "Clang")
+  # RPCGEN's historical variadic zdrproc_t callback ABI triggers this one UBSan
+  # check throughout upstream code. Other sanitizers stay on; app/bridge function
+  # pointer checks stay on. Do not globally suppress undefined behavior checks.
+  target_compile_options(nfs PRIVATE -fno-sanitize=function)
+endif()

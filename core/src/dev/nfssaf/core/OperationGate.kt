@@ -21,13 +21,17 @@ class OperationGate {
         val done=java.util.concurrent.atomic.AtomicBoolean()
         AutoCloseable { if(done.compareAndSet(false,true)) synchronized(monitor) { operations--; monitor.notifyAll() } }
     }
-    /** Returns false if another caller already owns cleanup. */
-    fun beginDrain(): Boolean = synchronized(monitor) {
-        if(state != State.Running) return false
-        state=State.Draining; true
+    class Drain internal constructor(private val gate: OperationGate) {
+        fun awaitIdle() = gate.awaitIdle()
+        fun finish() = gate.finishDrain()
     }
-    fun awaitIdle() = synchronized(monitor) { while(operations>0) monitor.wait() }
-    fun finishDrain() = synchronized(monitor) {
+    /** Only the caller receiving this ticket owns cleanup. */
+    fun beginDrain(): Drain? = synchronized(monitor) {
+        if(state != State.Running) return null
+        state=State.Draining; Drain(this)
+    }
+    private fun awaitIdle() = synchronized(monitor) { while(operations>0) monitor.wait() }
+    private fun finishDrain() = synchronized(monitor) {
         check(state == State.Draining && operations==0)
         state=State.Stopped; monitor.notifyAll()
     }

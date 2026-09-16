@@ -7,6 +7,7 @@
 #include <mutex>
 #include <atomic>
 #include <cerrno>
+#include <fcntl.h>
 
 using namespace nfssaf;
 namespace {
@@ -62,6 +63,13 @@ jobject entry(JNIEnv* env,const Entry& e) {
 #define JNI_METHOD(type,name) extern "C" JNIEXPORT type JNICALL Java_dev_nfssaf_NativeBridge_##name
 #define BEGIN(id) try { auto s=session(id); std::lock_guard<std::mutex> lock(s->mutex);
 #define END(ret) } catch(const std::exception& e) { fail(env,e); return ret; }
+JNI_METHOD(void,directProxy)(JNIEnv* env,jobject,jint fd) {
+    try {
+        int flags=fcntl(fd,F_GETFL);
+        if(flags<0 || fcntl(fd,F_SETFL,flags|O_DIRECT)<0) throw Error(errno,"Cannot enable coherent proxy IO");
+    END()
+}
+JNI_METHOD(jint,liveSessions)(JNIEnv*,jobject) { std::lock_guard<std::mutex> lock(registry_mutex); return sessions.size(); }
 JNI_METHOD(jlong,connect)(JNIEnv* env,jobject,jstring host,jstring path,jint version,jint port,jlong uid,jlong gid,jlongArray groups,jint timeout,jboolean ro) {
     try {
         Config c; c.host=utf8(env,host); c.export_path=utf8(env,path); c.version=version; c.port=port; c.uid=uid; c.gid=gid; c.timeout_ms=timeout; c.readonly=ro;
@@ -86,8 +94,8 @@ JNI_METHOD(jobjectArray,list)(JNIEnv* env,jobject,jlong id,jstring path) {
     for(size_t i=0;i<entries.size();++i) { auto e=entry(env,entries[i]); env->SetObjectArrayElement(out,i,e); env->DeleteLocalRef(e); if(env->ExceptionCheck()) return nullptr; }
     return out; END(nullptr)
 }
-JNI_METHOD(jlong,open)(JNIEnv* env,jobject,jlong id,jstring path,jint mode,jboolean exclusive) {
-    BEGIN(id) auto f=s->storage.open(utf8(env,path),mode,exclusive); auto key=s->next++; s->files.emplace(key,f); return key; END(0)
+JNI_METHOD(jlong,open)(JNIEnv* env,jobject,jlong id,jstring path,jint mode,jboolean exclusive,jlong inode,jlong device) {
+    BEGIN(id) auto f=s->storage.open(utf8(env,path),mode,exclusive,exclusive ? std::nullopt : std::optional<Identity>({uint64_t(inode),uint64_t(device)})); auto key=s->next++; s->files.emplace(key,f); return key; END(0)
 }
 JNI_METHOD(jobject,fstat)(JNIEnv* env,jobject,jlong id,jlong file) { BEGIN(id) return entry(env,s->storage.fstat(s->file(file))); END(nullptr) }
 JNI_METHOD(jint,read)(JNIEnv* env,jobject,jlong id,jlong file,jlong offset,jint size,jbyteArray data) {

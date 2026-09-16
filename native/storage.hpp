@@ -5,6 +5,7 @@
 #include <string>
 #include <vector>
 #include <functional>
+#include <optional>
 #include <thread>
 #include <mutex>
 #include <condition_variable>
@@ -21,6 +22,7 @@ struct Config {
     std::vector<uint32_t> groups;
     bool readonly = false;
 };
+struct Identity { uint64_t inode, device; };
 struct Entry {
     std::string name;
     uint64_t inode, device;
@@ -41,6 +43,7 @@ class Session {
     int renewal_failed = 0;
     void check(int result, const char* operation);
     void writable();
+    void healthy();
 public:
     explicit Session(const Config& config);
     ~Session();
@@ -49,7 +52,7 @@ public:
     Entry stat(const std::string& path);
     void safe_path(const std::string& path, bool allow_missing_leaf = false);
     std::vector<Entry> list(const std::string& path);
-    nfsfh* open(const std::string& path, int mode, bool exclusive = false);
+    nfsfh* open(const std::string& path, int mode, bool exclusive = false, std::optional<Identity> expected = std::nullopt);
     Entry fstat(nfsfh* file);
     size_t read(nfsfh* file, void* buffer, size_t size, uint64_t offset);
     size_t write(nfsfh* file, const void* buffer, size_t size, uint64_t offset);

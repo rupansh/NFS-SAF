@@ -17,12 +17,13 @@ class ConnectionService : Service() {
     private lateinit var wake: PowerManager.WakeLock
     private var stopping=false
     private var foreground=false
+    private var lastCount=-1
     private val pulse=object : Runnable {
         override fun run() {
             val count=services.backend.openCount
             if(count>0 && !wake.isHeld) wake.acquire()
             if(count==0 && wake.isHeld) wake.release()
-            getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID,notification(count))
+            if(count!=lastCount) { getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID,notification(count)); lastCount=count }
             main.postDelayed(this,1000)
         }
     }
@@ -39,6 +40,9 @@ class ConnectionService : Service() {
             foreground=true
         }
         if(intent?.action==STOP) { stopGracefully(); return START_NOT_STICKY }
+        if(!stopping && services.backend.gate.state()==OperationGate.State.Draining) {
+            stopping=true; stopForeground(STOP_FOREGROUND_REMOVE); stopSelf(); return START_NOT_STICKY
+        }
         if(!stopping) { services.backend.start(); mutableStatus.value=OperationGate.State.Running; main.removeCallbacks(pulse); main.post(pulse) }
         return START_NOT_STICKY
     }
@@ -55,19 +59,27 @@ class ConnectionService : Service() {
         if(stopping) return
         stopping=true; mutableStatus.value=OperationGate.State.Draining
         getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID,notification(services.backend.openCount))
+        val ticket=services.backend.requestDrain()
         cleanup.execute {
-            val errors=services.backend.drain()
-            if(errors.isNotEmpty()) services.errors.edit().putString("last","While stopping: ${errors.joinToString { it.message ?: "Close failed" }}").commit()
+            val errors=services.backend.drain(ticket)
+            recordErrors(errors)
             main.post { main.removeCallbacks(pulse); if(wake.isHeld) wake.release(); mutableStatus.value=OperationGate.State.Stopped; stopForeground(STOP_FOREGROUND_REMOVE); stopSelf() }
         }
     }
     override fun onDestroy() {
         main.removeCallbacksAndMessages(null)
         // Best effort for OS-initiated destruction. Force-stop does not call onDestroy.
-        if(!stopping) cleanup.execute { services.backend.drain(); if(wake.isHeld) wake.release(); mutableStatus.value=OperationGate.State.Stopped }
+        if(!stopping) {
+            mutableStatus.value=OperationGate.State.Draining
+            val ticket=services.backend.requestDrain()
+            cleanup.execute { recordErrors(services.backend.drain(ticket)); if(wake.isHeld) wake.release(); mutableStatus.value=OperationGate.State.Stopped }
+        }
         super.onDestroy()
     }
     override fun onBind(intent: Intent?): IBinder?=null
+    private fun recordErrors(errors: List<Throwable>) {
+        if(errors.isNotEmpty()) services.errors.edit().putString("last","While stopping: ${errors.joinToString { it.message ?: "Close failed" }}").commit()
+    }
     companion object {
         const val NOTIFICATION_ID=100
         private const val CHANNEL="nfs-connections"

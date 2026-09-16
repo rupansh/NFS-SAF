@@ -21,7 +21,7 @@ class NfsDocumentsProvider : DocumentsProvider() {
     private val services get() = Services.get(context!!)
     private val queries=Executors.newFixedThreadPool(4)
     private sealed interface Listing {
-        data object Loading : Listing
+        class Loading : Listing
         data class Ready(val nodes: List<Node>, val time: Long) : Listing
         data class Failed(val message: String, val time: Long) : Listing
     }
@@ -72,16 +72,17 @@ class NfsDocumentsProvider : DocumentsProvider() {
             val now=SystemClock.elapsedRealtime()
             val stale=old==null || (old is Listing.Ready && now-old.time>2000) || (old is Listing.Failed && now-old.time>5000)
             if(stale) {
-                listings[id]=Listing.Loading
+                val pending=Listing.Loading()
+                listings[id]=pending
                 queries.execute {
                     val result=try {
                         val nodes=services.backend.metadata(share) { s -> refresh(node,s); services.catalog.registerChildren(node.share,node.path,s.list(node.path)) }
                         Listing.Ready(nodes,SystemClock.elapsedRealtime())
                     } catch(t: Exception) { Listing.Failed(ConnectionProblem.from(t).message,SystemClock.elapsedRealtime()) }
-                    synchronized(listings) { if(listings[id] == Listing.Loading) listings[id]=result }
+                    synchronized(listings) { if(listings[id] === pending) listings[id]=result }
                     context!!.contentResolver.notifyChange(DocumentsContract.buildChildDocumentsUri(AUTHORITY,id.value),null)
                 }
-                Listing.Loading
+                pending
             } else old!!
         }
         val nodes=if(state is Listing.Ready) sorted(state.nodes,sortOrder) else emptyList()
@@ -178,6 +179,7 @@ class NfsDocumentsProvider : DocumentsProvider() {
                 refresh(node,s)
                 var count=0
                 fun remove(path: RemotePath, directory: Boolean, depth: Int) {
+                    if(services.backend.gate.state()!=OperationGate.State.Running) throw NfsException(125,"Deletion interrupted while stopping connections")
                     if(depth>128 || ++count>100000) throw NfsException(7,"Directory is too large to delete in one operation")
                     if(directory) s.list(path).forEach { remove(path.child(FileName(it.name)),it.directory,depth+1) }
                     s.remove(path,directory)
@@ -194,10 +196,8 @@ class NfsDocumentsProvider : DocumentsProvider() {
         context!!.contentResolver.notifyChange(DocumentsContract.buildDocumentUri(AUTHORITY,node.id.value),null)
         // Notify observers of every known parent cursor; descendants can have changed as well.
         context!!.contentResolver.notifyChange(DocumentsContract.buildRootsUri(AUTHORITY),null)
-        val parentId=if(node.path.parent==RemotePath.Root) node.share.value else runCatching {
-            services.backend.metadata(services.shares.get(node.share)) { services.catalog.register(node.share,node.path.parent,it.stat(node.path.parent)).id.value }
-        }.getOrNull()
-        parentId?.let { context!!.contentResolver.notifyChange(DocumentsContract.buildChildDocumentsUri(AUTHORITY,it),null) }
+        val parentId=services.catalog.pathId(node.share,node.path.parent)
+        parentId?.let { context!!.contentResolver.notifyChange(DocumentsContract.buildChildDocumentsUri(AUTHORITY,it.value),null) }
         if(node is Node.Directory) context!!.contentResolver.notifyChange(DocumentsContract.buildChildDocumentsUri(AUTHORITY,node.id.value),null)
     }
     override fun openDocument(documentId: String, mode: String, signal: CancellationSignal?): ParcelFileDescriptor = documentCall {
@@ -242,7 +242,10 @@ class NfsDocumentsProvider : DocumentsProvider() {
         }
         try {
             signal?.throwIfCanceled()
-            context!!.getSystemService(StorageManager::class.java).openProxyFileDescriptor(ParcelFileDescriptor.parseMode(mode),callback,Handler(thread.looper))
+            val proxy=context!!.getSystemService(StorageManager::class.java).openProxyFileDescriptor(ParcelFileDescriptor.parseMode(mode),callback,Handler(thread.looper))
+            // Android creates a distinct FUSE inode for each proxy. Bypass its
+            // per-open page cache so another descriptor's writes are visible.
+            try { NativeBridge.directProxy(proxy.fd); proxy } catch(t: Throwable) { proxy.close(); throw t }
         } catch(t: Throwable) { callback.onRelease(); throw t }
     }
     companion object {

@@ -14,18 +14,21 @@ internal class ShareStore(private val context: Context) {
     @Synchronized fun all(): List<Share> {
         val array=JSONArray(prefs.getString("shares","[]"))
         return (0 until array.length()).map { i -> array.getJSONObject(i).let { o ->
-            Share(ShareId(o.getString("id")),o.getString("name"),o.getString("host"),RemotePath(o.getString("export")),Protocol.valueOf(o.getString("protocol")),o.getInt("port"),o.getLong("uid"),o.getLong("gid"),o.getJSONArray("groups").let { g -> (0 until g.length()).map { g.getLong(it) } },o.getBoolean("readOnly"),o.getInt("timeout")).validate()
+            Share(ShareId(o.getString("id")),o.getString("name"),o.getString("host"),RemotePath(o.getString("export")),Protocol.valueOf(o.getString("protocol")),o.getInt("port"),o.getLong("uid"),o.getLong("gid"),o.getJSONArray("groups").let { g -> (0 until g.length()).map { g.getLong(it) } },o.getBoolean("readOnly"),o.getInt("timeout"),ReadPolicy.valueOf(o.optString("readPolicy",ReadPolicy.ReadAhead.name))).validate()
         } }
     }
     fun get(id: ShareId): Share = all().firstOrNull { it.id == id } ?: throw NfsException(2,"Share was removed")
     @Synchronized fun save(share: Share) {
-        share.validate(); val all=all().filterNot { it.id==share.id } + share
-        write(all)
+        replace(null,share)
+    }
+    @Synchronized fun replace(previous: ShareId?, share: Share) {
+        share.validate()
+        write(all().filterNot { it.id==share.id || it.id==previous } + share)
     }
     @Synchronized fun remove(id: ShareId) { write(all().filterNot { it.id==id }) }
     private fun write(shares: List<Share>) {
         val array=JSONArray()
-        shares.forEach { s -> array.put(JSONObject().put("id",s.id.value).put("name",s.name).put("host",s.host).put("export",s.export.value).put("protocol",s.protocol.name).put("port",s.port).put("uid",s.uid).put("gid",s.gid).put("groups",JSONArray(s.groups)).put("readOnly",s.readOnly).put("timeout",s.timeoutSeconds)) }
+        shares.forEach { s -> array.put(JSONObject().put("id",s.id.value).put("name",s.name).put("host",s.host).put("export",s.export.value).put("protocol",s.protocol.name).put("port",s.port).put("uid",s.uid).put("gid",s.gid).put("groups",JSONArray(s.groups)).put("readOnly",s.readOnly).put("timeout",s.timeoutSeconds).put("readPolicy",s.readPolicy.name)) }
         check(prefs.edit().putString("shares",array.toString()).commit()) { "Could not save settings" }
         context.contentResolver.notifyChange(DocumentsContract.buildRootsUri(AUTHORITY),null)
     }
@@ -64,6 +67,10 @@ internal class Catalog(context: Context) : SQLiteOpenHelper(context,"documents.d
         val db=writableDatabase; db.beginTransaction()
         try { val result=entries.map { register(share,parent.child(FileName(it.name)),it) }; db.setTransactionSuccessful(); return result }
         finally { db.endTransaction() }
+    }
+    @Synchronized fun pathId(share: ShareId, path: RemotePath): DocumentId? {
+        if(path==RemotePath.Root) return DocumentId(share.value)
+        return readableDatabase.query("documents",arrayOf("id"),"share=? AND path=?",arrayOf(share.value,path.value),null,null,null).use { c -> if(c.moveToFirst()) DocumentId(c.getString(0)) else null }
     }
     @Synchronized fun rename(file: Node.File, target: RemotePath) {
         writableDatabase.update("documents",ContentValues().apply { put("path",target.value) },"id=?",arrayOf(file.id.value))

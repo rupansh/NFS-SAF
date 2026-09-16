@@ -31,7 +31,7 @@ class ContractsTest {
     private class Fake : FileIo {
         var bytes = ByteArray(64); var closes = 0; var syncs = 0; var failClose = false
         override fun read(offset: Long, size: Int, data: ByteArray): Int { bytes.copyInto(data, 0, offset.toInt(), offset.toInt()+size); return size }
-        override fun write(offset: Long, size: Int, data: ByteArray): Int { data.copyInto(bytes, offset.toInt(), 0, size); return size }
+        override fun write(offset: Long, size: Int, data: ByteArray): WriteReceipt { data.copyInto(bytes, offset.toInt(), 0, size); return WriteReceipt(size,offset+size) }
         override fun sync() { syncs++ }
         override fun close() { closes++; if (failClose) throw NfsException(5, "Close failed") }
     }
@@ -73,14 +73,23 @@ class ContractsTest {
         val jobs=(1..100).map { threads.submit { p.acquire(5000).use { val n=active.incrementAndGet(); peak.accumulateAndGet(n,::maxOf); Thread.yield(); active.decrementAndGet() } } }
         jobs.forEach { it.get(10,TimeUnit.SECONDS) }; threads.shutdown(); p.close(); assertTrue(peak.get() <= 3); assertEquals(0,active.get())
     }
+    @Test fun poolClosesEveryResourceAndReportsFailures() {
+        var closed=0
+        val pool=LeasePool(3) { AutoCloseable { closed++; throw NfsException(5,"close $closed") } }
+        val leases=List(3) { pool.acquire() }; leases.forEach { it.close() }
+        try { pool.close(); fail("Close errors must be reported") }
+        catch(e: NfsException) { assertEquals(2,e.suppressed.size) }
+        assertEquals(3,closed); pool.close(); assertEquals(3,closed)
+        fails<IllegalStateException> { pool.acquire() }
+    }
     @Test fun drainRejectsNewOperationsAndWaitsForExistingOnes() {
         val gate=OperationGate()
         fails<NfsException> { gate.enter() }
         gate.start(); val operation=gate.enter()
-        assertTrue(gate.beginDrain()); assertFalse(gate.beginDrain())
+        val drain=gate.beginDrain()!!; assertNull(gate.beginDrain())
         fails<NfsException> { gate.enter() }; fails<IllegalStateException> { gate.start() }
         val worker=Executors.newSingleThreadExecutor()
-        val waiting=worker.submit { gate.awaitIdle(); gate.finishDrain() }
+        val waiting=worker.submit { drain.awaitIdle(); drain.finish() }
         Thread.sleep(20); assertFalse(waiting.isDone)
         operation.close(); operation.close(); waiting.get(2,TimeUnit.SECONDS)
         assertEquals(OperationGate.State.Stopped,gate.state()); gate.start(); gate.enter().close(); worker.shutdown()

@@ -15,6 +15,7 @@ data class Share(
     val groups: List<Long> = emptyList(),
     val readOnly: Boolean = false,
     val timeoutSeconds: Int = 10,
+    val readPolicy: ReadPolicy = ReadPolicy.ReadAhead,
 ) {
     fun validate(): Share = apply {
         require(name.isNotBlank() && name.length <= 120) { "Enter a name (up to 120 characters)" }
@@ -73,14 +74,19 @@ class LeasePool<T : AutoCloseable>(private val limit: Int, private val create: (
         try {
             val value = synchronized(this) { check(!closed) { "Pool is closed" }; idle.pollFirst() } ?: create()
             return Lease(value) { reusable ->
-                try { synchronized(this) { if (closed || !reusable) value.close() else idle.addLast(value) } }
+                try {
+                    val keep=synchronized(this) { if(closed || !reusable) false else { idle.addLast(value); true } }
+                    if(!keep) value.close()
+                }
                 finally { permits.release() }
             }
         } catch (t: Throwable) { permits.release(); throw t }
     }
-    override fun close() = synchronized(this) {
-        closed = true
-        while (idle.isNotEmpty()) runCatching { idle.removeFirst().close() }
+    override fun close() {
+        val values=synchronized(this) { closed=true; idle.toList().also { idle.clear() } }
+        var failure: Exception?=null
+        values.forEach { value -> try { value.close() } catch(e: Exception) { if(failure==null) failure=e else failure!!.addSuppressed(e) } }
+        failure?.let { throw it }
     }
 }
 class Lease<T>(val value: T, private val release: (Boolean) -> Unit) : AutoCloseable {

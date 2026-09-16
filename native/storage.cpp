@@ -38,6 +38,7 @@ size_t transfer_all(size_t size, const std::function<int(size_t, size_t)>& trans
 void Session::check(int result, const char* op) {
     if (result < 0) throw Error(-result, std::string(op) + ": " + nfs_get_error(ctx));
 }
+void Session::healthy() { if(renewal_failed) throw Error(ESTALE,"NFSv4 lease renewal failed; reopen the document"); }
 void Session::writable() { if (readonly) throw Error(EROFS, "Share is read-only"); }
 Session::Session(const Config& c) : readonly(c.readonly) {
     validate_path(c.export_path);
@@ -126,27 +127,31 @@ std::vector<Entry> Session::list(const std::string& path) { LOCK_SESSION;
     nfs_closedir(ctx, dir);
     return entries;
 }
-nfsfh* Session::open(const std::string& path, int mode, bool exclusive) { LOCK_SESSION;
+nfsfh* Session::open(const std::string& path, int mode, bool exclusive, std::optional<Identity> expected) { LOCK_SESSION; healthy();
     // Modes are app-defined, never Android/Linux numeric flag values across JNI.
     if (mode < 0 || mode > 4) throw Error(EINVAL, "Invalid open mode");
     if (mode != 0 || exclusive) writable();
     safe_path(path, exclusive);
     int flags = mode == 0 ? O_RDONLY : (mode == 1 || mode == 2 ? O_WRONLY : O_RDWR);
-    if (mode == 1 || mode == 4) flags |= O_TRUNC;
     if (exclusive) flags |= O_CREAT | O_EXCL;
     flags |= O_NOFOLLOW;
     nfsfh* file = nullptr;
     check(nfs_open2(ctx, path.c_str(), flags, 0660, &file), "Open file");
-    try { if (!S_ISREG(fstat(file).mode)) throw Error(EISDIR, "Not a regular file"); }
+    try {
+        auto actual=fstat(file);
+        if (!S_ISREG(actual.mode)) throw Error(EISDIR, "Not a regular file");
+        if(expected && (actual.inode!=expected->inode || actual.device!=expected->device)) throw Error(ESTALE,"Document was replaced before open");
+        if(mode==1 || mode==4) check(nfs_ftruncate(ctx,file,0),"Truncate file");
+    }
     catch (...) { nfs_close(ctx, file); throw; }
     return file;
 }
 Entry Session::fstat(nfsfh* file) { LOCK_SESSION; nfs_stat_64 s{}; check(nfs_fstat64(ctx, file, &s), "File stat"); return entry(s, ""); }
-size_t Session::read(nfsfh* file, void* buffer, size_t size, uint64_t offset) { LOCK_SESSION;
+size_t Session::read(nfsfh* file, void* buffer, size_t size, uint64_t offset) { LOCK_SESSION; healthy();
     if (offset > uint64_t(INT64_MAX) || size > uint64_t(INT64_MAX) - offset) throw Error(EINVAL, "Offset overflow");
     return transfer_all(size, [&](size_t done, size_t count) { return nfs_pread(ctx, file, static_cast<char*>(buffer) + done, count, offset + done); }, false);
 }
-size_t Session::write(nfsfh* file, const void* buffer, size_t size, uint64_t offset) { LOCK_SESSION;
+size_t Session::write(nfsfh* file, const void* buffer, size_t size, uint64_t offset) { LOCK_SESSION; healthy();
     writable();
     if (offset > uint64_t(INT64_MAX) || size > uint64_t(INT64_MAX) - offset) throw Error(EINVAL, "Offset overflow");
     return transfer_all(size, [&](size_t done, size_t count) { return nfs_pwrite(ctx, file, static_cast<const char*>(buffer) + done, count, offset + done); }, true);
