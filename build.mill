@@ -1,0 +1,84 @@
+package build
+import mill.*, androidlib.*, kotlinlib.*, scalalib.*
+
+object androidSdk extends AndroidSdkModule {
+  def buildToolsVersion = "36.1.0"
+  override def ndkVersion = "29.0.14206865"
+  override def cmdlineToolsVersion = "latest"
+  // Mill 1.1.9 still requests the removed SDK "tools" package. Resolve installed
+  // SDK components directly; debug APKs use D8 and do not need legacy ProGuard.
+  override def androidSdk = Task {
+    val root = os.Path(Task.env("ANDROID_HOME"))
+    val platform = root / "platforms" / "android-36"
+    val bt = root / "build-tools" / buildToolsVersion()
+    val jar = PathRef(platform / "android.jar")
+    AndroidSdkComponents(root, jar, Seq(jar), bt,
+      PathRef(bt / "d8"), PathRef(bt / "aapt2"), PathRef(bt / "zipalign"),
+      PathRef(bt / "apksigner"), PathRef(root / "platform-tools" / "adb"),
+      root / "tools" / "proguard")
+  }
+}
+object core extends KotlinModule {
+  def kotlinVersion = "2.1.20"
+  override def kotlincOptions = Seq("-jvm-target", "17")
+  object test extends KotlinTests, TestModule.Junit4 {
+    def junit4Version = "4.13.2"
+  }
+}
+object native extends Module {
+  def sources = Task.Sources(mill.api.BuildCtx.workspaceRoot / "native", mill.api.BuildCtx.workspaceRoot / "vendor/libnfs")
+  def host = Task {
+    sources()
+    os.proc("cmake", "-S", (mill.api.BuildCtx.workspaceRoot / "native").toString, "-B", Task.dest.toString,
+      "-G", "Ninja", "-DCMAKE_BUILD_TYPE=RelWithDebInfo").call(stdout = os.Inherit)
+    os.proc("cmake", "--build", Task.dest.toString, "-j", "8").call(stdout = os.Inherit)
+    PathRef(Task.dest)
+  }
+  def test() = Task.Command {
+    os.proc("ctest", "--test-dir", host().path.toString, "--output-on-failure").call(stdout = os.Inherit)
+  }
+  def android = Task {
+    sources()
+    val ndk = os.Path(Task.env("ANDROID_HOME")) / "ndk" / androidSdk.ndkVersion()
+    for (abi <- Seq("arm64-v8a", "x86_64")) {
+      val dest = Task.dest / abi
+      os.proc("cmake", "-S", (mill.api.BuildCtx.workspaceRoot / "native").toString, "-B", dest.toString,
+        "-G", "Ninja", s"-DCMAKE_TOOLCHAIN_FILE=$ndk/build/cmake/android.toolchain.cmake",
+        s"-DANDROID_ABI=$abi", "-DANDROID_PLATFORM=android-28", "-DANDROID_STL=c++_static",
+        "-DCMAKE_BUILD_TYPE=Release", s"-DCMAKE_LIBRARY_OUTPUT_DIRECTORY=${Task.dest}/lib/$abi").call(stdout = os.Inherit)
+      os.proc("cmake", "--build", dest.toString, "--target", "nfssaf", "-j", "8").call(stdout = os.Inherit)
+    }
+    PathRef(Task.dest / "lib")
+  }
+}
+object app extends AndroidAppKotlinModule {
+  def kotlinVersion = "2.1.20"
+  def androidSdkModule = mill.api.ModuleRef(androidSdk)
+  def androidMinSdk = 28
+  def androidCompileSdk = 36
+  override def androidTargetSdk = 36
+  def androidApplicationId = "dev.nfssaf"
+  def androidApplicationNamespace = "dev.nfssaf"
+  def moduleDeps = Seq(core)
+  override def kotlincOptions = super.kotlincOptions() ++ Seq("-jvm-target", "17")
+  override def kotlinUseEmbeddableCompiler = Task { true }
+  override def androidEnableCompose = true
+  def bomMvnDeps = Seq(mvn"androidx.compose:compose-bom:2025.05.00")
+  def mvnDeps = Seq(
+    mvn"androidx.activity:activity-compose:1.10.1",
+    mvn"androidx.compose.material3:material3",
+    mvn"androidx.compose.foundation:foundation",
+    mvn"androidx.compose.ui:ui",
+    mvn"org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2"
+  )
+  override def androidPackageableExtraFiles = Task {
+    val root = native.android().path
+    super.androidPackageableExtraFiles() ++ os.walk(root).filter(_.ext == "so").map(p =>
+      AndroidPackageableExtraFile(PathRef(p), os.RelPath("lib") / p.relativeTo(root)))
+  }
+  object androidTest extends AndroidAppKotlinInstrumentedTests {
+    override def kotlinUseEmbeddableCompiler = Task { true }
+    override def androidEnableCompose = true
+    def mvnDeps = Seq(mvn"junit:junit:4.13.2", mvn"androidx.test:runner:1.6.2", mvn"androidx.test.ext:junit:1.2.1")
+  }
+}

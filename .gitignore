@@ -1,0 +1,9 @@
+out/
+.research/
+.cache/
+.idea/
+.bsp/
+local.properties
+*.jks
+*.keystore
+captures/
