@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   test:
-    name: Storage, contracts and signing tests
+    name: Code quality, storage, contracts and signing tests
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -39,6 +39,12 @@ jobs:
             ~/.cache/mill
           key: ${{ runner.os }}-mill-${{ hashFiles('build.mill', '.mill-version') }}
           restore-keys: ${{ runner.os }}-mill-
+
+      - name: Install the pinned Android Lint tool
+        run: sdkmanager "cmdline-tools;19.0"
+
+      - name: Check formatting, Kotlin and Android code
+        run: ./mill quality.spotless --check + quality.detekt + app.androidLintRun
 
       - name: Check storage and static contracts
         run: |

@@ -4,7 +4,21 @@ import mill.*, androidlib.*, kotlinlib.*, scalalib.*
 object androidSdk extends AndroidSdkModule {
   def buildToolsVersion = "36.1.0"
   override def ndkVersion = "29.0.14206865"
-  override def cmdlineToolsVersion = "latest"
+  override def cmdlineToolsVersion = "19.0"
+  // The SDK launcher inherits the host Java, which can be newer than Lint supports.
+  // Keep the documented androidLintRun task while selecting its Java 21 runtime.
+  override def lintExe = Task {
+    val executable = super.lintExe().path.toString
+    val launcher = Task.dest / "lint"
+    os.write(
+      launcher,
+      "#!/usr/bin/env python3\nimport os, sys\n" +
+        s"os.environ['JAVA_HOME'] = ${ujson.write(quality.javaHome().get.path.toString)}\n" +
+        s"os.execv(${ujson.write(executable)}, [${ujson.write(executable)}, *sys.argv[1:]])\n"
+    )
+    os.perms.set(launcher, "rwxr-xr-x")
+    PathRef(launcher)
+  }
   // Mill 1.1.9 still requests the removed SDK "tools" package. Resolve installed
   // SDK components directly; our D8 APKs do not need legacy ProGuard.
   override def androidSdk = Task {
@@ -12,26 +26,53 @@ object androidSdk extends AndroidSdkModule {
     val platform = root / "platforms" / "android-36"
     val bt = root / "build-tools" / buildToolsVersion()
     val jar = PathRef(platform / "android.jar")
-    AndroidSdkComponents(root, jar, Seq(jar), bt,
-      PathRef(bt / "d8"), PathRef(bt / "aapt2"), PathRef(bt / "zipalign"),
-      PathRef(bt / "apksigner"), PathRef(root / "platform-tools" / "adb"),
-      root / "tools" / "proguard")
+    AndroidSdkComponents(
+      root,
+      jar,
+      Seq(jar),
+      bt,
+      PathRef(bt / "d8"),
+      PathRef(bt / "aapt2"),
+      PathRef(bt / "zipalign"),
+      PathRef(bt / "apksigner"),
+      PathRef(root / "platform-tools" / "adb"),
+      root / "tools" / "proguard"
+    )
   }
 }
 object core extends KotlinModule {
   def kotlinVersion = "2.1.20"
   override def kotlincOptions = Seq("-jvm-target", "17")
   def contractCheck() = Task.Command {
-    val cp = runClasspath().filter(p => os.exists(p.path)).map(_.path.toString).mkString(java.io.File.pathSeparator)
-    val compiler = kotlinCompilerClasspath().map(_.path.toString).mkString(java.io.File.pathSeparator)
+    val cp = runClasspath()
+      .filter(p => os.exists(p.path))
+      .map(_.path.toString)
+      .mkString(java.io.File.pathSeparator)
+    val compiler =
+      kotlinCompilerClasspath().map(_.path.toString).mkString(java.io.File.pathSeparator)
     val valid = Task.dest / "Valid.kt"
-    os.write(valid, """import dev.nfssaf.core.*
+    os.write(
+      valid,
+      """import dev.nfssaf.core.*
 fun valid(f: FileHandle<ReadWriteAccess>) { f.read(0, 1, ByteArray(1)); f.write(0, 1, ByteArray(1)); f.fsync() }
 fun metadata(r: MetadataReads) { r.run { it.stat(RemotePath.Root); it.list(RemotePath.Root) } }
-""")
-    def check(source: os.Path) = os.proc("java", "-cp", compiler,
-      "org.jetbrains.kotlin.cli.jvm.K2JVMCompiler", "-no-stdlib", "-no-reflect",
-      "-classpath", cp, "-d", (Task.dest / "classes").toString, source.toString).call(check = false, stdout = os.Pipe, stderr = os.Pipe)
+"""
+    )
+    def check(source: os.Path) = os
+      .proc(
+        "java",
+        "-cp",
+        compiler,
+        "org.jetbrains.kotlin.cli.jvm.K2JVMCompiler",
+        "-no-stdlib",
+        "-no-reflect",
+        "-classpath",
+        cp,
+        "-d",
+        (Task.dest / "classes").toString,
+        source.toString
+      )
+      .call(check = false, stdout = os.Pipe, stderr = os.Pipe)
     val good = check(valid)
     require(good.exitCode == 0, good.err.text())
     val badCases = Seq(
@@ -46,7 +87,10 @@ fun metadata(r: MetadataReads) { r.run { it.stat(RemotePath.Root); it.list(Remot
       val source = Task.dest / s"Invalid$i.kt"
       os.write(source, "import dev.nfssaf.core.*\n" + code)
       val result = check(source)
-      require(result.exitCode != 0 && result.err.text().contains("error:"), s"Contract $i unexpectedly compiled")
+      require(
+        result.exitCode != 0 && result.err.text().contains("error:"),
+        s"Contract $i unexpectedly compiled"
+      )
     }
     Task.log.info("PASS: valid capabilities compile; six invalid contracts are rejected")
   }
@@ -55,27 +99,51 @@ fun metadata(r: MetadataReads) { r.run { it.stat(RemotePath.Root); it.list(Remot
   }
 }
 object native extends Module {
-  def sources = Task.Sources(mill.api.BuildCtx.workspaceRoot / "native", mill.api.BuildCtx.workspaceRoot / "vendor/libnfs")
+  def sources = Task.Sources(
+    mill.api.BuildCtx.workspaceRoot / "native",
+    mill.api.BuildCtx.workspaceRoot / "vendor/libnfs"
+  )
   def host = Task {
     sources()
-    os.proc("cmake", "-S", (mill.api.BuildCtx.workspaceRoot / "native").toString, "-B", Task.dest.toString,
-      "-G", "Ninja", "-DCMAKE_BUILD_TYPE=RelWithDebInfo").call(stdout = os.Inherit)
+    os.proc(
+      "cmake",
+      "-S",
+      (mill.api.BuildCtx.workspaceRoot / "native").toString,
+      "-B",
+      Task.dest.toString,
+      "-G",
+      "Ninja",
+      "-DCMAKE_BUILD_TYPE=RelWithDebInfo"
+    ).call(stdout = os.Inherit)
     os.proc("cmake", "--build", Task.dest.toString, "-j", "8").call(stdout = os.Inherit)
     PathRef(Task.dest)
   }
   def test() = Task.Command {
-    os.proc("ctest", "--test-dir", host().path.toString, "--output-on-failure").call(stdout = os.Inherit)
+    os.proc("ctest", "--test-dir", host().path.toString, "--output-on-failure")
+      .call(stdout = os.Inherit)
   }
   def android = Task {
     sources()
     val ndk = os.Path(Task.env("ANDROID_HOME")) / "ndk" / androidSdk.ndkVersion()
     for (abi <- Seq("arm64-v8a", "x86_64")) {
       val dest = Task.dest / abi
-      os.proc("cmake", "-S", (mill.api.BuildCtx.workspaceRoot / "native").toString, "-B", dest.toString,
-        "-G", "Ninja", s"-DCMAKE_TOOLCHAIN_FILE=$ndk/build/cmake/android.toolchain.cmake",
-        s"-DANDROID_ABI=$abi", "-DANDROID_PLATFORM=android-28", "-DANDROID_STL=c++_static",
-        "-DCMAKE_BUILD_TYPE=Release", s"-DCMAKE_LIBRARY_OUTPUT_DIRECTORY=${Task.dest}/lib/$abi").call(stdout = os.Inherit)
-      os.proc("cmake", "--build", dest.toString, "--target", "nfssaf", "-j", "8").call(stdout = os.Inherit)
+      os.proc(
+        "cmake",
+        "-S",
+        (mill.api.BuildCtx.workspaceRoot / "native").toString,
+        "-B",
+        dest.toString,
+        "-G",
+        "Ninja",
+        s"-DCMAKE_TOOLCHAIN_FILE=$ndk/build/cmake/android.toolchain.cmake",
+        s"-DANDROID_ABI=$abi",
+        "-DANDROID_PLATFORM=android-28",
+        "-DANDROID_STL=c++_static",
+        "-DCMAKE_BUILD_TYPE=Release",
+        s"-DCMAKE_LIBRARY_OUTPUT_DIRECTORY=${Task.dest}/lib/$abi"
+      ).call(stdout = os.Inherit)
+      os.proc("cmake", "--build", dest.toString, "--target", "nfssaf", "-j", "8")
+        .call(stdout = os.Inherit)
     }
     PathRef(Task.dest / "lib")
   }
@@ -98,11 +166,19 @@ object filesystemTests extends Module {
     val ndk = os.Path(Task.env("ANDROID_HOME")) / "ndk" / androidSdk.ndkVersion()
     for (abi <- Seq("arm64-v8a", "x86_64")) {
       val dest = Task.dest / abi
-      os.proc("cmake", "-S", (mill.api.BuildCtx.workspaceRoot / "tests/fsx").toString,
-        "-B", dest.toString, "-G", "Ninja",
+      os.proc(
+        "cmake",
+        "-S",
+        (mill.api.BuildCtx.workspaceRoot / "tests/fsx").toString,
+        "-B",
+        dest.toString,
+        "-G",
+        "Ninja",
         s"-DCMAKE_TOOLCHAIN_FILE=$ndk/build/cmake/android.toolchain.cmake",
-        s"-DANDROID_ABI=$abi", "-DANDROID_PLATFORM=android-28",
-        "-DCMAKE_BUILD_TYPE=Release").call(stdout = os.Inherit)
+        s"-DANDROID_ABI=$abi",
+        "-DANDROID_PLATFORM=android-28",
+        "-DCMAKE_BUILD_TYPE=Release"
+      ).call(stdout = os.Inherit)
       os.proc("cmake", "--build", dest.toString).call(stdout = os.Inherit)
       os.copy(dest / "libfsx.so", Task.dest / "lib" / abi / "libfsx.so", createFolders = true)
     }
@@ -127,18 +203,23 @@ trait NfsAppModule extends AndroidAppKotlinModule {
   def bomMvnDeps = Seq(mvn"androidx.compose:compose-bom:2025.05.00")
   def mvnDeps = Seq(
     mvn"androidx.activity:activity-compose:1.10.1",
+    mvn"androidx.core:core-ktx:1.13.0",
     mvn"androidx.compose.material3:material3",
     mvn"androidx.compose.foundation:foundation",
     mvn"androidx.compose.ui:ui",
     mvn"org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2"
   )
   override def androidPackageableNativeDeps = Task {
-    super.androidPackageableNativeDeps().filter(p => Set("arm64-v8a", "x86_64").contains(p.destination.last))
+    super
+      .androidPackageableNativeDeps()
+      .filter(p => Set("arm64-v8a", "x86_64").contains(p.destination.last))
   }
   override def androidPackageableExtraFiles = Task {
     val root = nativeLibraries().path
-    super.androidPackageableExtraFiles() ++ os.walk(root).filter(_.ext == "so").map(p =>
-      AndroidPackageableExtraFile(PathRef(p), os.RelPath("lib") / p.relativeTo(root)))
+    super.androidPackageableExtraFiles() ++ os
+      .walk(root)
+      .filter(_.ext == "so")
+      .map(p => AndroidPackageableExtraFile(PathRef(p), os.RelPath("lib") / p.relativeTo(root)))
   }
   def nativeLibraries = Task { native.android() }
 }
@@ -147,17 +228,161 @@ object release extends NfsAppModule {
   override def nativeLibraries = Task { native.androidRelease() }
 }
 object app extends NfsAppModule {
+  def lintConfig = Task.Source(mill.api.BuildCtx.workspaceRoot / "lint.xml")
+  override def androidLintConfigPath = Task { Some(lintConfig()) }
+  override def androidLintReportFormat = Task {
+    Seq(AndroidLintReportFormat.Txt, AndroidLintReportFormat.Html, AndroidLintReportFormat.Xml)
+  }
+  override def androidLintArgs = Task {
+    Seq("--project", quality.androidLintProject().path.toString, "--exitcode", "-Werror")
+  }
   object androidTest extends AndroidAppKotlinInstrumentedTests {
     override def kotlinUseEmbeddableCompiler = Task { true }
     override def androidEnableCompose = true
-    def mvnDeps = Seq(mvn"junit:junit:4.13.2", mvn"androidx.test:runner:1.6.2", mvn"androidx.test.ext:junit:1.2.1")
+    def mvnDeps = Seq(
+      mvn"junit:junit:4.13.2",
+      mvn"androidx.test:runner:1.6.2",
+      mvn"androidx.test.ext:junit:1.2.1"
+    )
     override def androidPackageableNativeDeps = Task {
-      super.androidPackageableNativeDeps().filter(p => Set("arm64-v8a", "x86_64").contains(p.destination.last))
+      super
+        .androidPackageableNativeDeps()
+        .filter(p => Set("arm64-v8a", "x86_64").contains(p.destination.last))
     }
     override def androidPackageableExtraFiles = Task {
       val root = filesystemTests.android().path
-      super.androidPackageableExtraFiles() ++ os.walk(root).filter(_.ext == "so").map(p =>
-        AndroidPackageableExtraFile(PathRef(p), os.RelPath("lib") / p.relativeTo(root)))
+      super.androidPackageableExtraFiles() ++ os
+        .walk(root)
+        .filter(_.ext == "so")
+        .map(p => AndroidPackageableExtraFile(PathRef(p), os.RelPath("lib") / p.relativeTo(root)))
     }
+  }
+}
+
+object quality extends mill.javalib.JavaModule, mill.javalib.spotless.SpotlessModule {
+  override def moduleDir = mill.api.BuildCtx.workspaceRoot
+  override def jvmId = "temurin:21"
+
+  def formatTools = Task {
+    os.proc("python3", "-m", "venv", Task.dest.toString).call(stdout = os.Inherit)
+    os.proc(
+      (Task.dest / "bin/pip").toString,
+      "install",
+      "--disable-pip-version-check",
+      "clang-format==23.1.1",
+      "ruff==0.16.8"
+    ).call(stdout = os.Inherit)
+    PathRef(Task.dest)
+  }
+  def formatConfig = Task.Sources(
+    moduleDir / ".scalafmt.conf",
+    moduleDir / ".clang-format",
+    moduleDir / "ruff.toml",
+    moduleDir / ".editorconfig"
+  )
+  override def spotlessFormats = Task {
+    formatConfig()
+    import mill.javalib.spotless.Format
+    import Format.*
+    val tools = formatTools().path / "bin"
+    RelPathRef.withDynamicRoot(moduleDir) {
+      Seq(
+        Format(
+          Seq(Ktfmt(version = "0.53", style = "KOTLINLANG", maxWidth = Some(100))),
+          Seq("glob:app/src/**/*.kt", "glob:core/**/*.kt")
+        ),
+        Format(Seq(ScalaFmt(version = "3.11.5", scalaMajorVersion = "3")), Seq("glob:build.mill")),
+        Format(
+          Seq(
+            NativeCmd(
+              "clang-format",
+              (tools / "clang-format").toString,
+              Seq(s"--style=file:${moduleDir}/.clang-format")
+            )
+          ),
+          Seq("glob:native/*.{c,cpp,hpp}", "glob:tests/fsx/bridge.c")
+        ),
+        Format(
+          Seq(
+            NativeCmd(
+              "ruff",
+              (tools / "ruff").toString,
+              Seq(
+                "format",
+                "--config",
+                (moduleDir / "ruff.toml").toString,
+                "--stdin-filename",
+                "script.py",
+                "-"
+              )
+            )
+          ),
+          Seq("glob:scripts/*.py")
+        )
+      )
+    }
+  }
+  override def spotlessExcludes = Task {
+    Seq(
+      "glob:out/**",
+      "glob:.research/**",
+      "glob:vendor/**",
+      "glob:tests/fsx/vendor/**",
+      "glob:.git/**"
+    )
+  }
+
+  def detektClasspath = Task {
+    defaultResolver().classpath(Seq(mvn"io.gitlab.arturbosch.detekt:detekt-cli:1.23.8"))
+  }
+  def detekt() = Task.Command {
+    val cp = (app.compileClasspath() ++ app.androidTest.compileClasspath() ++ core.test
+      .compileClasspath()).map(_.path).distinct
+    mill.util.Jvm.callProcess(
+      mainClass = "io.gitlab.arturbosch.detekt.cli.Main",
+      javaHome = javaHome().map(_.path),
+      classPath = detektClasspath().map(_.path),
+      mainArgs = Seq(
+        "--input",
+        s"${moduleDir}/app/src,${moduleDir}/core/src,${moduleDir}/core/test/src",
+        "--config",
+        (moduleDir / "detekt.yml").toString,
+        "--build-upon-default-config",
+        "--classpath",
+        cp.mkString(java.io.File.pathSeparator),
+        "--jvm-target",
+        "17",
+        "--base-path",
+        moduleDir.toString,
+        "--report",
+        s"html:${Task.dest}/report.html",
+        "--report",
+        s"xml:${Task.dest}/report.xml"
+      ),
+      cwd = moduleDir,
+      stdout = os.Inherit
+    )
+  }
+  def androidLintScript = Task.Source(moduleDir / "scripts/android-lint.py")
+  def androidLintProject = Task {
+    val model = ujson.Obj(
+      "root" -> moduleDir.toString,
+      "sdk" -> Task.env("ANDROID_HOME"),
+      "mergedManifest" -> release.androidMergedManifest().path.toString,
+      "compileSdk" -> app.androidCompileSdk(),
+      "classpath" -> ujson.Arr.from(app.runClasspath().map(_.path.toString)),
+      "classes" -> ujson
+        .Arr(app.compile().classes.path.toString, core.compile().classes.path.toString),
+      "aars" -> ujson.Arr.from(app.androidAarMvnDeps().map(_.path.toString))
+    )
+    val input = Task.dest / "model.json"
+    os.write(input, ujson.write(model))
+    os.proc(
+      "python3",
+      androidLintScript().path.toString,
+      input.toString,
+      Task.dest.toString
+    ).call(stdout = os.Inherit)
+    PathRef(Task.dest / "project.xml")
   }
 }

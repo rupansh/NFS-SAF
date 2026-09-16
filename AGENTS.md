@@ -29,6 +29,11 @@ Preserve the supplied `docs/logo.svg`; regenerate adaptive icon resources with
   NFS RENAME for a destination which might already exist.
 
 ## Verification and workflow
+- Format with `./mill quality.spotless`; check with
+  `./mill quality.spotless --check + quality.detekt + app.androidLintRun`.
+  Use the pinned formatters and keep upstream/vendor code untouched. Do not add
+  a lint baseline. Explain narrowly scoped suppressions at ABI, lifecycle or
+  cleanup boundaries; preserve cancellation and propagate or record cleanup failures.
 - `./mill core.test + core.contractCheck + native.test` checks runtime and compile-time contracts.
 - `scripts/build-apks.sh` builds and verifies universal debug/release variants.
   `./mill app.androidTest.androidTestApk` builds instrumentation.
@@ -46,4 +51,6 @@ Preserve the supplied `docs/logo.svg`; regenerate adaptive icon resources with
   and instrumentation. Record exclusions and retain the corruption detection test.
 - Lookup primary documentation when unsure. Ask the user if specific required
   documentation cannot be found.
-- Commit appropriate tested checkpoints (authorized by the user). Do not push.
+- Commit appropriate tested checkpoints. The user has authorized pushing
+  `master` to `rupansh/NFS-SAF`; do not publish other repositories or branches
+  without authorization.

@@ -15,7 +15,8 @@ git clone --recurse-submodules https://github.com/rupansh/NFS-SAF.git
 cd NFS-SAF
 export ANDROID_HOME="$HOME/Android/Sdk"
 "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
-  'platforms;android-36' 'build-tools;36.1.0' 'ndk;29.0.14206865' 'platform-tools'
+  'platforms;android-36' 'build-tools;36.1.0' 'ndk;29.0.14206865' 'platform-tools' \
+  'cmdline-tools;19.0'
 ```
 
 For an existing clone, run `git submodule update --init --recursive`.
@@ -52,6 +53,33 @@ ARM64+x86-64 libraries, absence of the fsx test executable, ZIP/16 KiB ELF align
 signing state. Native compilation targets API 28 with 16 KiB ELF alignment.
 
 ## Test
+
+Format before committing, then run all three code quality checks:
+
+```sh
+./mill quality.spotless
+./mill quality.spotless --check + quality.detekt + app.androidLintRun
+```
+
+Mill's [Spotless integration](https://mill-build.org/mill/kotlinlib/linting.html)
+formats Kotlin with ktfmt 0.53, the Mill build with Scalafmt 3.11.5, native code
+with clang-format 23.1.1, and Python with Ruff 0.16.8. ktfmt is pinned to the
+version supported by Mill 1.1.9's bundled Spotless. Formatting excludes generated
+output and both vendor trees. Python's `venv` and `pip` must be available; Mill
+installs the native/Python formatters into its output directory.
+
+Detekt 1.23.8 checks production and test Kotlin with type resolution. The standard
+[Android Lint task](https://mill-build.org/mill/android/android-linting.html)
+uses SDK command-line tools 19.0 (Lint 8.9.0) and a provisioned Java 21 runtime.
+Its project description includes the merged release manifest, app/core sources,
+compiled classes, runtime dependencies and AAR lint rules, including Compose.
+Warnings fail the check. Reports are in `out/quality/detekt.dest/` and
+`out/app/androidLintRun.dest/` (HTML/XML, plus Lint text).
+
+There is no baseline. Keep exception suppressions local and documented: JNI
+signatures, resource cleanup, declarative form orchestration, and the fsx wire
+dispatcher have constraints that generic style thresholds do not describe.
+The `Tests` workflow runs these checks; APK packaging stays independent.
 
 ```sh
 ./mill core.test + core.contractCheck + native.test

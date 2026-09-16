@@ -1,0 +1,26 @@
+build:
+  maxIssues: 0
+config:
+  validation: true
+  warningsAsErrors: true
+naming:
+  FunctionNaming:
+    ignoreAnnotated: ['Composable']
+complexity:
+  TooManyFunctions:
+    ignoreOverridden: true
+  LongParameterList:
+    ignoreDefaultParameters: true
+    ignoreDataClasses: true
+style:
+  ReturnCount:
+    excludeGuardClauses: true
+  MaxLineLength:
+    maxLineLength: 100
+    excludeCommentStatements: true
+  MagicNumber:
+    excludes: ['**/test/**', '**/androidTest/**']
+    ignorePropertyDeclaration: true
+    ignoreEnums: true
+  UnusedPrivateMember:
+    ignoreAnnotated: ['Preview']

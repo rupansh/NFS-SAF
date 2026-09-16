@@ -8,8 +8,10 @@
 static void renew_done(struct rpc_context *rpc, int status, void *data, void *opaque) {
     (void)rpc;
     int *failed = opaque;
-    if (status == RPC_STATUS_CANCEL) return;
-    if (status != RPC_STATUS_SUCCESS || !data || ((COMPOUND4res *)data)->status != NFS4_OK) *failed = 1;
+    if (status == RPC_STATUS_CANCEL)
+        return;
+    if (status != RPC_STATUS_SUCCESS || !data || ((COMPOUND4res *)data)->status != NFS4_OK)
+        *failed = 1;
 }
 int nfssaf_renew_v4(struct nfs_context *nfs, int *failed) {
     nfs_argop4 op = {0};

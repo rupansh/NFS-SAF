@@ -207,3 +207,29 @@ remain outside that interface and are never automatically replayed.
 
 Physical-phone acceptance of the updated app remains separate from the emulator
 regressions; the captured phone error predates the fix.
+
+## Formatter and lint checkpoint (2026-09-16)
+
+Spotless, Detekt and Android Lint pass without a baseline. Deliberate temporary
+defects verified that Spotless rejects malformed Kotlin formatting, Detekt
+rejects invalid function names, and Android Lint rejects both missing Android
+permissions and unused Material 3 Scaffold padding. The probes were removed
+before the final checks. The standard `app.androidLintRun` task receives the
+actual project metadata and explicitly registered AAR lint jars; this matters
+because standalone AAR discovery alone does not load Compose checks.
+
+After formatting and lint fixes, all 29 Kotlin tests, six compiler contracts,
+35 native live checks and 35 ASan/UBSan checks passed. The complete API 36
+emulator suite passed **26/26 tests in 156.183 seconds**, including 60,000 fsx
+operations across SAF/JNI and the corruption oracle. The AUTH_SYS relay verified
+82 RPCs with the requested UID/GID/groups; an unresponsive mount timed out in
+3.009 seconds. Universal debug/release packaging and disposable-key signing
+failure/cleanup tests passed. The extracted connection cards were also checked
+visually on the emulator.
+
+Formatting applies to project-owned Kotlin, Mill, Python and native wrappers.
+The libnfs submodule, upstream fsx sources and original logo are unchanged.
+JNI error-handling macros were expanded into explicit try/catch blocks so the
+formatter can follow their scope. Runtime fixes include renewing a bounded
+wake-lock timeout while files remain open and explicit backup exclusions for
+installation-specific document identities.

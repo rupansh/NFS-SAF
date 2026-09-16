@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<lint>
+    <!-- Original logo geometry is retained in the generated, cached launcher drawable. -->
+    <issue id="VectorPath">
+        <ignore path="app/src/main/res/drawable/ic_launcher_foreground.xml" />
+    </issue>
+    <!-- API 33+ selects the matching v33 resource, which contains the monochrome layer. -->
+    <issue id="MonochromeLauncherIcon">
+        <ignore path="app/src/main/res/mipmap-anydpi/ic_launcher.xml" />
+    </issue>
+</lint>
