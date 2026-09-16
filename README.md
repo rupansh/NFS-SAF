@@ -8,6 +8,7 @@
 
 <p align="center">
   <a href="https://github.com/rupansh/NFS-SAF/actions/workflows/android.yml"><img src="https://github.com/rupansh/NFS-SAF/actions/workflows/android.yml/badge.svg" alt="Android builds"></a>
+  <a href="https://github.com/rupansh/NFS-SAF/actions/workflows/tests.yml"><img src="https://github.com/rupansh/NFS-SAF/actions/workflows/tests.yml/badge.svg" alt="Tests"></a>
   <img src="https://img.shields.io/badge/Android-9%2B-3DDC84?logo=android&logoColor=white" alt="Android 9 or newer">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="MIT license"></a>
 </p>
@@ -39,9 +40,9 @@ APK includes both architectures.
 
 1. Open [Android builds](https://github.com/rupansh/NFS-SAF/actions/workflows/android.yml)
    and select a successful push or manual run.
-2. Download **nfs-saf-release-universal** from its **Artifacts** section. GitHub
+2. Download **nfs-saf-release-universal.apk** from its **Artifacts** section. GitHub
    requires you to sign in to download workflow artifacts.
-3. Extract the ZIP, open `nfs-saf-release-universal.apk`, and allow installation
+3. Open the downloaded APK and allow installation
    from your browser or file manager if Android asks.
 
 The release APK is signed with the project's release key. A debug APK is also

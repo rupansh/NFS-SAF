@@ -1,24 +1,28 @@
 # Signed builds and GitHub Actions
 
-[Android builds](../.github/workflows/android.yml) runs storage unit tests,
-compiler contract checks, a network timeout check, native ASan/UBSan checks,
-and builds universal ARM64+x86-64 APKs with Mill. It also compiles the Android
-instrumentation APK. Live NFS and emulator tests are run separately; see
-[the verified matrix](testing.md).
+[Android builds](../.github/workflows/android.yml) only builds, verifies,
+signs and uploads universal ARM64+x86-64 APKs with Mill. The independent
+[Tests workflow](../.github/workflows/tests.yml) runs storage unit tests,
+compiler contracts, network timeouts, native ASan/UBSan checks and disposable-key
+signing tests. It also compiles the Android instrumentation APK and an unsigned
+release fixture for signing tests. Neither workflow waits for the other.
+Live NFS and emulator tests run separately; see [the verified matrix](testing.md).
 
-An isolated disposable-key test verifies signing identity, checksums, missing
-or invalid credentials, wrong passwords/alias and temporary-file cleanup.
-It never writes test-signed APKs into the downloadable artifact directories.
+Both workflows use the Android SDK/NDK, CMake, Ninja and Clang already installed
+on [GitHub's Ubuntu 24.04 runner](https://github.com/actions/runner-images/blob/main/images/ubuntu/Ubuntu2404-Readme.md).
+`build.mill` selects the pinned SDK and NDK versions. Dependency downloads are
+cached; tests never receive the production signing secrets or publish APKs.
 
 | Trigger | Debug APK | Release APK |
 | --- | --- | --- |
 | Push or manual run | Signed with a generated debug key | Signed with the configured release key |
 | Pull request | Signed with a generated debug key | Compiled and checked; no release artifact is uploaded |
 
-Push/manual builds fail early when release signing secrets are missing.
-They never publish an unsigned APK as a release. Each successful artifact
-includes `SHA256SUMS` and is retained for 30 days. The workflow creates Actions
-artifacts, not GitHub Releases or tags.
+Signing fails when release secrets are missing or invalid; an unsigned release
+is never uploaded. Each artifact is a single `.apk` that downloads directly,
+using [upload-artifact's `archive: false`](https://github.com/actions/upload-artifact#upload-an-individual-file-unzipped).
+SHA-256 checksums appear in the build summary; artifacts are retained for 30
+days. The workflow creates Actions artifacts, not GitHub Releases or tags.
 
 ## Configure the release key once
 
@@ -66,8 +70,8 @@ If you reused a key, substitute its keystore path and alias. The
 
 ## How signing works
 
-Signing secrets are scoped only to configuration validation and the signing
-step; pull requests receive none. `scripts/sign-release.py` decodes the
+Signing secrets are scoped only to the signing step; pull requests receive
+none. `scripts/sign-release.py` decodes the
 keystore into a private temporary directory outside the workspace, supplies
 passwords to `apksigner` through environment references, and removes the
 temporary directory on success or ordinary failure. Key material does not

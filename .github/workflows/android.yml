@@ -14,9 +14,9 @@ concurrency:
 
 jobs:
   build:
-    name: Test and build universal APKs
+    name: Build and sign universal APKs
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 30
     steps:
       - name: Check out source and pinned libnfs
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -24,32 +24,13 @@ jobs:
           submodules: recursive
           persist-credentials: false
 
-      - name: Check release signing configuration
-        if: github.event_name != 'pull_request'
-        env:
-          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-        run: python3 scripts/sign-release.py --check-config
-
       - name: Set up Java 21
         uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
         with:
           distribution: temurin
           java-version: '21'
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3
-        with:
-          packages: platform-tools
-          log-accepted-android-sdk-licenses: false
-
-      - name: Install build tools
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends cmake ninja-build clang
-          sdkmanager 'platforms;android-36' 'build-tools;36.1.0' 'ndk;29.0.14206865'
+      # ubuntu-24.04 supplies the SDK, NDK, CMake and Ninja selected by build.mill.
 
       - name: Cache downloaded dependencies
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
@@ -60,19 +41,8 @@ jobs:
           key: ${{ runner.os }}-mill-${{ hashFiles('build.mill', '.mill-version') }}
           restore-keys: ${{ runner.os }}-mill-
 
-      - name: Check storage and static contracts
-        run: |
-          ./mill core.test + core.contractCheck + native.test
-          python3 scripts/network-tests.py
-          scripts/sanitizer-test.sh
-
       - name: Build and verify universal debug and release variants
-        run: |
-          scripts/build-apks.sh
-          ./mill app.androidTest.androidTestApk
-
-      - name: Test signing and failure cleanup with a disposable key
-        run: python3 scripts/test-signing.py
+        run: scripts/build-apks.sh
 
       - name: Sign and verify the release APK
         if: github.event_name != 'pull_request'
@@ -84,19 +54,19 @@ jobs:
         run: python3 scripts/sign-release.py
 
       - name: Upload signed universal debug APK
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: nfs-saf-debug-universal
-          path: out/artifacts/debug/
+          path: out/artifacts/debug/nfs-saf-debug-universal.apk
+          archive: false
           if-no-files-found: error
           retention-days: 30
 
       - name: Upload signed universal release APK
         if: github.event_name != 'pull_request'
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: nfs-saf-release-universal
-          path: out/artifacts/release/
+          path: out/artifacts/release/nfs-saf-release-universal.apk
+          archive: false
           if-no-files-found: error
           retention-days: 30
 
@@ -111,5 +81,8 @@ jobs:
             echo 'Push/manual runs: release signed with the configured release key.'
             echo 'Pull requests: release compilation is checked without access to signing secrets.'
             echo "Source commit: $SOURCE_COMMIT"
-            echo 'Each downloadable artifact includes SHA256SUMS.'
+            echo 'Artifacts download directly as APK files. SHA-256 checksums:'
+            echo '```text'
+            cat out/artifacts/*/SHA256SUMS
+            echo '```'
           } >> "$GITHUB_STEP_SUMMARY"

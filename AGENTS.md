@@ -30,6 +30,8 @@ Preserve the supplied `docs/logo.svg`; regenerate adaptive icon resources with
   `./mill app.androidTest.androidTestApk` builds instrumentation.
 - Release signing uses `scripts/sign-release.py`; keep credentials outside Mill
   tasks, logs, caches and artifacts. See `docs/releasing.md` for Actions secrets.
+- Keep tests in `.github/workflows/tests.yml`, separate from APK packaging in
+  `android.yml`. Upload single APKs with `archive: false`, without an outer ZIP.
 - Integration tests may only mutate newly created `.nfssaf-test-*` directories
   on an explicitly supplied export. Never traverse/delete unrelated test data.
 - Do not change the host NFS export policy, ownership, or restart system services

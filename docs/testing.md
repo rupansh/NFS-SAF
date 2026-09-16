@@ -1,5 +1,11 @@
 # Storage verification
 
+The independent [Tests workflow](../.github/workflows/tests.yml) runs Kotlin,
+compiler-contract, native, timeout, sanitizer and disposable-key signing checks
+on every push and pull request. It compiles instrumentation without an emulator.
+The [build workflow](../.github/workflows/android.yml) only builds, verifies,
+signs and uploads app APKs; it does not run tests or compile instrumentation.
+
 ## Reproduce
 
 Set `ANDROID_HOME` to the installed SDK (on the development machine,
