@@ -3,7 +3,7 @@
 Build with the pinned `./mill`; do not add Gradle. Kotlin/Compose Material 3 is the
 Android front end; pinned `vendor/libnfs` supplies NFS 3, 4.0 and 4.2 through JNI.
 Read `docs/architecture.md` for contracts and limitations before changing storage.
-Preserve the supplied `logo.svg`; regenerate adaptive icon resources with
+Preserve the supplied `docs/logo.svg`; regenerate adaptive icon resources with
 `python3 scripts/generate-icons.py` instead of editing generated path data.
 
 ## Contracts
@@ -26,7 +26,10 @@ Preserve the supplied `logo.svg`; regenerate adaptive icon resources with
 
 ## Verification and workflow
 - `./mill core.test + core.contractCheck + native.test` checks runtime and compile-time contracts.
-- `./mill app.androidApk + app.androidTest.androidTestApk` builds Android artifacts.
+- `scripts/build-apks.sh` builds and verifies universal debug/release variants.
+  `./mill app.androidTest.androidTestApk` builds instrumentation.
+- Release signing uses `scripts/sign-release.py`; keep credentials outside Mill
+  tasks, logs, caches and artifacts. See `docs/releasing.md` for Actions secrets.
 - Integration tests may only mutate newly created `.nfssaf-test-*` directories
   on an explicitly supplied export. Never traverse/delete unrelated test data.
 - Do not change the host NFS export policy, ownership, or restart system services

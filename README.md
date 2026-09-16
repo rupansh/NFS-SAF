@@ -1,73 +1,109 @@
-# NFS SAF
+<p align="center">
+  <img src="docs/logo-readme.svg" width="144" alt="NFS SAF logo">
+</p>
 
-An Android Storage Access Framework provider backed by libnfs, with a Kotlin
-Jetpack Compose / Material 3 connection manager. Android 9+; ARM64 and x86-64.
-Built using **Mill**, CMake and the Android NDK, without Gradle.
+<h1 align="center">NFS SAF</h1>
 
-Add a connection, set its export path and numeric UID/GID, then tap **Save &
-connect**. Allow notifications: the foreground connection service shows a
-persistent notification while running. Select the connection in another app's
-Android Open/Save picker. **Stop connections** drains operations, closes files,
-and disconnects; reopening files requires starting connections again.
+<p align="center">Your NFS files, in Android's file picker.</p>
 
-NFS 4.2 is the default. NFS 3 and 4.0 are selectable for compatible servers.
-UID/GID and supplementary groups use AUTH_SYS; use a trusted network or VPN.
-Android uses unprivileged source ports: configure `insecure` for the intended
-client on the server export if required, then reload exports. The app explains
-this when the server denies a mount. NFSv4 pseudo-root export paths may differ
-from the server's local paths. Read-only mode is enforced by the backend.
+<p align="center">
+  <a href="https://github.com/rupansh/NFS-SAF/actions/workflows/android.yml"><img src="https://github.com/rupansh/NFS-SAF/actions/workflows/android.yml/badge.svg" alt="Android builds"></a>
+  <img src="https://img.shields.io/badge/Android-9%2B-3DDC84?logo=android&logoColor=white" alt="Android 9 or newer">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="MIT license"></a>
+</p>
 
-## Build
+NFS SAF connects your NAS or Linux server to Android's **Storage Access Framework**.
+Open and save remote files from apps that use the system file picker—no root
+required. Manage connections in a Material 3 interface built with Jetpack Compose.
 
-Prerequisites: JDK 21 (Mill can provision its JVM), CMake, Ninja, Android SDK
-platform 36, build-tools 36.1.0, NDK 29.0.14206865, and platform-tools.
+## A place for your remote files
 
-```sh
-git submodule update --init --recursive
-export ANDROID_HOME="$HOME/Android/Sdk"
-"$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
-  'platforms;android-36' 'build-tools;36.1.0' 'ndk;29.0.14206865' 'platform-tools'
-./mill core.test + core.contractCheck + native.test
-./mill app.androidApk
-```
+- **Open, edit and save in place.** Stream files without downloading a full copy first.
+- **Use your server's identity settings.** Set numeric UID, GID and supplementary groups for each connection.
+- **Choose your protocol.** NFS 4.2 by default, with NFS 4.0 and NFS 3 options.
+- **Stay in control.** A persistent notification shows when connections are running and provides a Stop action.
+- **Tune each connection.** Read-only access and optional read-ahead for sequential reads.
 
-APK: `out/app/androidApk.dest/app.apk` (development/debug signing).
+<p align="center">
+  <img src="docs/screenshots/connections.png" width="280" alt="NFS SAF connection manager with service status and Add connection button">
+  &nbsp;&nbsp;
+  <img src="docs/screenshots/add-connection.png" width="280" alt="Add connection form with server, export path, NFS version and UID/GID settings">
+</p>
 
-```sh
-adb install --no-incremental -r out/app/androidApk.dest/app.apk
-```
+<p align="center"><em>Connection manager and setup, captured on Android 16.</em></p>
 
-Mill 1.1.9's SDK downloader requests the obsolete `tools` package. The build
-resolves installed SDK components directly to avoid that upstream issue.
-Native compilation explicitly uses API 28 and 16 KiB ELF segment alignment.
-For Android Studio, generate project metadata with `./mill mill.idea/`.
+## Install
 
-The adaptive launcher icon is generated from the supplied `logo.svg`; run
-`python3 scripts/generate-icons.py` after updating that source. It has separate
-background/foreground layers and Android 13+ themed-icon support.
-Its vector paths are centered within the circular safe zone described in
-[Android's adaptive-icon guide](https://developer.android.com/develop/ui/compose/system/icon_design_adaptive).
+Requires **Android 9 or newer** on an **ARM64 or x86-64** device. Each universal
+APK includes both architectures.
 
-## Tests
+1. Open [Android builds](https://github.com/rupansh/NFS-SAF/actions/workflows/android.yml)
+   and select a successful push or manual run.
+2. Download **nfs-saf-release-universal** from its **Artifacts** section. GitHub
+   requires you to sign in to download workflow artifacts.
+3. Extract the ZIP, open `nfs-saf-release-universal.apk`, and allow installation
+   from your browser or file manager if Android asks.
 
-Native unit tests exercise partial reads/writes, EOF, errno and path validation.
-Kotlin tests cover capability-typed handles, state transitions, bounds, pool
-ownership, tree containment and connection diagnostics. To run live native
-storage checks, supply an authorized export; only a new `.nfssaf-test-*`
-directory is mutated. The optional final argument holds a file idle to test
-lease renewal.
+The release APK is signed with the project's release key. A debug APK is also
+available for development; switching between debug and release requires
+uninstalling the other build, which removes saved connections. CI artifacts
+expire after 30 days. [About GitHub artifact downloads](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/download-workflow-artifacts).
 
-```sh
-./mill native.host
-out/native/host.dest/storage_tests SERVER /EXPORT 42 95
-./mill app.androidTest.androidTestApk
-```
+## Connect your server
 
-Android test instructions and measured results are recorded in `docs/testing.md`.
-The test APK includes unmodified upstream FreeBSD **fsx**, adapted to both SAF
-descriptors and typed JNI handles: six seeded runs of 10,000 operations, plus
-an injected-corruption check. It is not bundled into the application APK.
-See `docs/architecture.md` for SAF contracts, lifecycle and explicit limitations.
+1. Join the same network as your NFS server, or connect through a trusted VPN.
+2. Tap **Add connection**. Enter a name, server address and exported path.
+3. Choose the NFS version and numeric **UID/GID** that your server expects.
+   The default `65534` is commonly an anonymous identity; ask your server
+   administrator if you are unsure.
+4. Tap **Save & connect** and allow notifications so connection status stays visible.
+5. In another app, choose **Open** or **Save**, open the system picker's sidebar,
+   and select your connection.
 
-Application source: MIT. Bundled libnfs: LGPL-2.1-or-later. Upstream test code
-retains its own license; see `THIRD_PARTY.md`.
+NFS SAF supplies storage to other apps; browse your files through Android's
+picker. Apps with their own private file browser may not show SAF locations.
+
+Use **Stop connections** in the app or **Stop** in its notification when finished.
+The service waits for admitted operations, commits and closes open files, then
+disconnects. Start connections again in NFS SAF before reopening remote files.
+Android force-stop or process termination cannot guarantee that cleanup runs.
+
+## Server setup and troubleshooting
+
+| Symptom | What to check |
+| --- | --- |
+| Access denied while connecting | Android uses unprivileged ports. Your server may need the `insecure` export option for the intended client. The app includes this guidance when a mount is denied; UID/GID and export permissions can also cause denial. |
+| Export not found with NFS 4 | Use the server's NFSv4 export path. Its pseudo-root can differ from the server's local filesystem path. |
+| Files are readable but cannot be changed | Check UID/GID, supplementary groups, server permissions and the connection's read-only setting. |
+| Connection is visible but unavailable in the picker | Open NFS SAF and start connections. Check that your server and network are reachable. |
+| Another client changed a file | Reopen it to refresh its size. Disable read-ahead when immediate visibility of external changes matters. |
+
+For Linux exports, `insecure` means allowing source ports above 1023; it does
+not grant write permission. Apply it only to the intended client or network
+and reload your exports. [Linux export options](https://man7.org/linux/man-pages/man5/exports.5.html).
+
+Use a trusted network or VPN: AUTH_SYS identities are not passwords, and this
+app does not provide NFS encryption or Kerberos authentication.
+
+## Compatibility
+
+The app exposes regular files and directories. Symbolic links, special files
+and directory renaming are not supported. Network interruptions can fail an
+operation; uncertain writes are not silently repeated.
+
+Storage tests cover real SAF and JNI access, including 60,000 randomized
+operations from FreeBSD's fsx suite. Runtime validation currently covers
+**NFS 4.2 on Android 16, x86-64**. Other supported Android versions, NFS 3/4.0,
+and physical ARM64 devices still need broader testing.
+
+## Project
+
+[Report an issue](https://github.com/rupansh/NFS-SAF/issues) ·
+[Build from source](docs/development.md) ·
+[Signing and CI](docs/releasing.md) ·
+[Storage tests](docs/testing.md) ·
+[Architecture](docs/architecture.md)
+
+Powered by [libnfs](https://github.com/sahlberg/libnfs). Application source is
+[MIT licensed](LICENSE); bundled libnfs is LGPL-2.1-or-later. See
+[third-party notices](THIRD_PARTY.md) for dependency and test-suite licenses.
