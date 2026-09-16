@@ -41,7 +41,7 @@ jobs:
           restore-keys: ${{ runner.os }}-mill-
 
       - name: Install the pinned Android Lint tool
-        run: sdkmanager "cmdline-tools;19.0"
+        run: '"$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "cmdline-tools;19.0"'
 
       - name: Check formatting, Kotlin and Android code
         run: ./mill quality.spotless --check + quality.detekt + app.androidLintRun
