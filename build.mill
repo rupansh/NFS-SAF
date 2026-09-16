@@ -6,7 +6,7 @@ object androidSdk extends AndroidSdkModule {
   override def ndkVersion = "29.0.14206865"
   override def cmdlineToolsVersion = "latest"
   // Mill 1.1.9 still requests the removed SDK "tools" package. Resolve installed
-  // SDK components directly; debug APKs use D8 and do not need legacy ProGuard.
+  // SDK components directly; our D8 APKs do not need legacy ProGuard.
   override def androidSdk = Task {
     val root = os.Path(Task.env("ANDROID_HOME"))
     val platform = root / "platforms" / "android-36"
@@ -76,6 +76,17 @@ object native extends Module {
     }
     PathRef(Task.dest / "lib")
   }
+  def androidRelease = Task {
+    val root = android().path
+    val strip = os.Path(Task.env("ANDROID_HOME")) / "ndk" / androidSdk.ndkVersion() /
+      "toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip"
+    for (source <- os.walk(root).filter(_.ext == "so")) {
+      val target = Task.dest / source.relativeTo(root)
+      os.copy(source, target, createFolders = true)
+      os.proc(strip.toString, "--strip-unneeded", target.toString).call(stdout = os.Inherit)
+    }
+    PathRef(Task.dest)
+  }
 }
 object filesystemTests extends Module {
   def sources = Task.Sources(mill.api.BuildCtx.workspaceRoot / "tests/fsx")
@@ -95,7 +106,8 @@ object filesystemTests extends Module {
     PathRef(Task.dest / "lib")
   }
 }
-object app extends AndroidAppKotlinModule {
+trait NfsAppModule extends AndroidAppKotlinModule {
+  override def moduleDir = mill.api.BuildCtx.workspaceRoot / "app"
   def kotlinVersion = "2.1.20"
   def androidSdkModule = mill.api.ModuleRef(androidSdk)
   def androidMinSdk = 28
@@ -103,6 +115,8 @@ object app extends AndroidAppKotlinModule {
   override def androidTargetSdk = 36
   def androidApplicationId = "dev.nfssaf"
   def androidApplicationNamespace = "dev.nfssaf"
+  override def androidVersionCode = 1
+  override def androidVersionName = "1.0"
   def moduleDeps = Seq(core)
   override def kotlincOptions = super.kotlincOptions() ++ Seq("-jvm-target", "17")
   override def kotlinUseEmbeddableCompiler = Task { true }
@@ -119,10 +133,17 @@ object app extends AndroidAppKotlinModule {
     super.androidPackageableNativeDeps().filter(p => Set("arm64-v8a", "x86_64").contains(p.destination.last))
   }
   override def androidPackageableExtraFiles = Task {
-    val root = native.android().path
+    val root = nativeLibraries().path
     super.androidPackageableExtraFiles() ++ os.walk(root).filter(_.ext == "so").map(p =>
       AndroidPackageableExtraFile(PathRef(p), os.RelPath("lib") / p.relativeTo(root)))
   }
+  def nativeLibraries = Task { native.android() }
+}
+object release extends NfsAppModule {
+  override def androidIsDebug = Task { false }
+  override def nativeLibraries = Task { native.androidRelease() }
+}
+object app extends NfsAppModule {
   object androidTest extends AndroidAppKotlinInstrumentedTests {
     override def kotlinUseEmbeddableCompiler = Task { true }
     override def androidEnableCompose = true

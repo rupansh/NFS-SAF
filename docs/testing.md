@@ -106,6 +106,27 @@ is disabled only for libnfs's legacy RPCGEN callback ABI; address, alignment,
 and other undefined-behavior checks remain enabled. This does not mean the
 entire Android application was run under ASan.
 
+## Release packaging verification (2026-09-16)
+
+Both universal variants built successfully with ARM64 and x86-64 only. APK
+inspection confirmed debug signing/debuggability for the development variant,
+disabled debuggability for release, 16 KiB-compatible ELF load segments in all
+native libraries, aligned ZIP entries and no fsx executable in either app APK.
+
+`scripts/test-signing.py` exercised an isolated disposable key: missing/partial
+secrets, invalid/empty base64, incorrect store and key passwords, missing alias,
+successful signing with the expected certificate, artifact checksum, unchanged
+unsigned input and cleanup of temporary keystores. This test creates no
+production signing identity and leaves no test-signed distribution artifact.
+
+The **nondebug release APK** and instrumentation APK were then signed with a
+separate disposable matching certificate and installed on the same API 36
+emulator. **20/20 tests passed in 119.586 seconds**, including all 60,000 fsx
+operations and the exit-110 corruption oracle. This validates the release
+variant locally; it is not a GitHub Actions run or physical ARM64 validation.
+The signing keys were removed after installation. The workflow passed
+actionlint 1.7.12 locally; a hosted run requires repository signing secrets.
+
 ## Performance evidence
 
 Content is verified, not merely timed. The stream benchmark uses a seeded
