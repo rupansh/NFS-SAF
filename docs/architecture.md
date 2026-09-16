@@ -26,6 +26,14 @@ and a dedicated handler survive until the proxy descriptor closes. File size is
 cached at open and updated on writes, so onGetSize never requires the network.
 Short reads fill the requested range until EOF; short writes loop or fail.
 No automatic reconnect/replay of uncertain writes. Native contexts time out.
+Metadata reads have a capability-restricted interface exposing only stat/list.
+A transport failure discards its leased context and retries once through the
+metadata pool. A stopped/draining service, cancellation, absent path, permission
+denial, stale identity or exhausted pool does not retry. Failed new mounts also
+consume an attempt. A failed attempt's cleanup and the second attempt can each
+consume RPC timeout intervals; this is not a single end-to-end timeout setting.
+The native `autoreconnect=0` and `retrans=0` settings remain deliberate: libnfs's
+nonzero retrans mode can retry indefinitely, including pending mutations.
 
 SQLite assigns persistent opaque IDs to paths and records inode/device identity.
 Known replacements invalidate previous IDs. Provider rename preserves its ID.
@@ -91,10 +99,28 @@ kill provides no callback guarantee. There is no offline write journal.
 
 ## Performance and consistency
 
-Directory listings are asynchronous with EXTRA_LOADING, bounded cached results,
-notification URIs, and per-load identity to prevent an old completion replacing a
-newer listing after mutation. READDIR metadata avoids per-child stat RPCs.
-Pools separate metadata from open files; contexts are never used concurrently.
+Directory queries return a complete snapshot on the caller's query worker.
+Material Files' name-to-document-ID lookup ignores EXTRA_LOADING; an empty
+loading cursor can therefore become NoSuchFileException for an existing folder.
+Its ordinary listing waits for a cursor notification, which can arrive before
+observer registration. Complete cursors avoid both loading behaviors.
+
+Snapshots expire after two seconds and use a 32-entry LRU keyed by share
+configuration and document ID. Concurrent queries for a tracked key share one
+load; no network IO holds the cache monitor. Eviction or mutation detaches the
+old load so it cannot repopulate the cache. Failures propagate and are not
+cached as empty/stale success. Operational query errors use an IPC-supported
+IllegalStateException with a user-facing reason and errno: DocumentsProvider
+otherwise catches FileNotFoundException and returns a null cursor. Actual
+missing paths retain its normal not-found behavior. Notification URIs still
+announce mutations. READDIR metadata avoids per-child stat RPCs. Pools separate
+metadata from open files; contexts are never used concurrently.
+
+References for these compatibility decisions:
+- https://github.com/zhanghai/MaterialFiles/blob/master/app/src/main/java/me/zhanghai/android/files/provider/document/resolver/DocumentResolver.kt
+- https://android.googlesource.com/platform/frameworks/base/+/refs/heads/main/core/java/android/provider/DocumentsProvider.java
+- https://android.googlesource.com/platform/frameworks/base/+/refs/heads/main/core/java/android/database/DatabaseUtils.java
+- https://github.com/sahlberg/libnfs#readme
 
 Proxy descriptors use `fcntl(F_SETFL, O_DIRECT)` through the NDK to bypass
 Android's per-open FUSE page cache. Without this, a descriptor can return old
@@ -121,9 +147,14 @@ Sources:
 
 ## Native dependency fix
 
-`native/libnfs-fixes.cmake` generates one corrected upstream translation unit
-with `memcpy` for an otherwise unaligned FSID load, preserving its byte layout.
-The pinned submodule stays unmodified. The fix is checked against the exact
-upstream expression and fails closed on drift. Clang UBSan's function-pointer
+`native/libnfs-fixes.cmake` generates corrected upstream translation units.
+It uses `memcpy` for an otherwise unaligned FSID load, preserving its byte layout.
+The common NFS 3/4 RPC error callbacks map timeouts to ETIMEDOUT instead of EINTR
+and transport failures to EIO instead of EFAULT; they also populate the context
+error string used by synchronous stat. Cancellation stays distinct. These
+branches were found with the pinned source and an NFS 4.2 blackhole regression;
+NFS 3 runtime recovery remains unvalidated. The pinned submodule stays unmodified.
+Replacements check their exact upstream text and occurrence count and fail on
+drift. Clang UBSan's function-pointer
 checker is disabled only for libnfs's legacy RPCGEN callback ABI, not for app or
 bridge code. Address/alignment/other undefined-behavior checks remain active.

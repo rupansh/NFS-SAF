@@ -81,21 +81,22 @@ API 36 image was installed separately. NDK 29.0.14206865 builds ARM64 and
 x86-64 with 16 KiB ELF alignment. ARM64 builds have not run on a physical phone.
 
 Coverage:
-- Final full instrumentation run: **20/20 passed in 123.139 seconds**; all six
+- Initial full instrumentation run: **20/20 passed in 123.139 seconds**; all six
   upstream fsx runs returned zero, and deliberate corruption returned 110.
-- 16 Kotlin unit tests: path/Unicode/tree validation, modes, unsigned identity
+- 29 Kotlin unit tests: path/Unicode/tree validation, modes, unsigned identity
   bounds, generic handle ownership, concurrent bounded leases, cleanup failure
-  aggregation, drain admission and read-ahead coherence/expiry/EOF.
-- Compiler contract checks: one valid capability program plus four invalid
-  read/write/node/ID combinations that must not compile.
+  aggregation, drain admission, read-ahead coherence/expiry/EOF, complete snapshot
+  caching, coalesced loads, invalidation, cancellation and bounded metadata recovery.
+- Compiler contract checks: valid capabilities plus six invalid read/write/node/ID
+  and metadata-mutation combinations that must not compile.
 - 16 native deterministic checks; 35 checks against the live NFS 4.2 export,
   including short transfers, errno, Unicode, sparse 64-bit offsets, exclusive
   create, rename collision, identity-before-truncate and readonly enforcement.
 - Native idle-open lease test held a handle for 95 seconds before verified IO.
 - Blackhole TCP peer: mount failure in approximately 3 seconds with a 3-second
   timeout. RPC proxy verifies the configured AUTH_SYS identities independently.
-- 20 Android instrumentation tests exercise real ContentResolver/DocumentsContract/FUSE/JNI:
-  projections, async listings, Unicode, create/read/write/rename/delete, tree
+- 26 Android instrumentation tests exercise real ContentResolver/DocumentsContract/FUSE/JNI:
+  projections, complete listings, Unicode, create/read/write/rename/delete, tree
   grants, root protection, modes, cancellation, pool exhaustion, replacement
   identity, catalog persistence, concurrent writers and cache invalidation.
 - Foreground-service tests check ongoing notification, synchronous admission
@@ -162,3 +163,47 @@ MINOR_VERS_MISMATCH. No kernel mount/POSIX conformance, remote-server reboot
 recovery, network handover, cross-client atomic append, Kerberos, or TLS claims.
 Force-stop/process kill cannot promise a callback or successful commit.
 Close errors remain visible in app state instead of being silently retried.
+
+## Material Files regression and network recovery (2026-09-16)
+
+Final verification: **26/26 instrumentation tests passed in 154.283 seconds**,
+including all six 10,000-operation fsx runs and the deliberate corruption oracle.
+All 29 Kotlin tests and six negative compiler contracts passed. Native live and
+ASan/UBSan runs each passed 35 checks; the AUTH_SYS proxy and bounded blackhole
+mount checks passed. Both universal APK variants passed packaging verification.
+
+Two tests failed on the original provider with a healthy NFS 4.2 server: looking
+up an existing folder by ID/name projection on a cold cache and after the
+two-second expiry. Material Files' name lookup does not wait for EXTRA_LOADING,
+so the provider's empty loading cursor returned no match. A phone capture also
+showed a directory query interrupted inside Material Files' loading wait; it
+did not establish an NFS timeout as the cause of that particular reproduction.
+
+The provider now returns complete snapshots. Original regression tests also
+cover full-projection queries without an observer, a stopped service with a
+warm cache, a dropped established TCP connection, and a blackholed expired
+listing followed by recovery. The fault relay affects only test-owned sockets
+and makes no changes to the server, host network or export. Dropping a request
+requires exactly one replacement connection. An unanswered query with a
+three-second RPC timeout failed with ETIMEDOUT after one retry in about ten
+seconds, including failed-session cleanup and reconnect; after the relay was
+restored, the next query succeeded without waiting out an error cache.
+
+The blackhole test initially exposed libnfs returning EINTR and an empty stat
+error for a timeout. Generated-source corrections preserve ETIMEDOUT/EIO and
+their messages while keeping actual cancellation distinct. The common NFS 3
+callbacks are corrected too, but live recovery validation covers NFS 4.2 only.
+The full run also exposed an older collision test that assumed task submission
+order determined the winning filename; it now selects the actual winner and
+verifies every contender's bytes after the rejected collision.
+
+Cache unit tests include simultaneous readers, independent directory loads,
+expiry, eviction during a load, invalidation during a load, original failure
+propagation, and an interrupted waiter that must not cancel another caller's
+load. Read-recovery tests cover the two-attempt limit, bad-session disposal,
+mount failure, semantic errors, cancellation and stopping between attempts.
+Compiler checks reject mkdir/remove through the retry interface. File mutations
+remain outside that interface and are never automatically replayed.
+
+Physical-phone acceptance of the updated app remains separate from the emulator
+regressions; the captured phone error predates the fix.

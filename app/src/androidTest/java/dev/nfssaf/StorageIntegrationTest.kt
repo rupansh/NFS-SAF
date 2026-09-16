@@ -88,6 +88,97 @@ class StorageIntegrationTest {
         assertEquals(id(f),id(renamed)); assertArrayEquals(bytes,read(f))
         assertTrue(DC.deleteDocument(resolver,f)); assertEquals(0,children(directory).size)
     }
+    private fun lookupChildByName(parent: Uri, name: String): String? {
+        // Material Files resolves paths with exactly this projection, without
+        // waiting for EXTRA_LOADING. An empty cursor becomes NoSuchFileException.
+        val projection=arrayOf(D.COLUMN_DOCUMENT_ID,D.COLUMN_DISPLAY_NAME)
+        resolver.query(DC.buildChildDocumentsUri(AUTHORITY,id(parent)),projection,null,null,null)!!.use { cursor ->
+            while(cursor.moveToNext()) {
+                if(cursor.getString(1)==name) return cursor.getString(0)
+            }
+        }
+        return null
+    }
+    @Test fun folderNameLookupOnColdListingFindsExistingFolder() {
+        val folder=create("existing",type=D.MIME_TYPE_DIR)
+        assertEquals(id(folder),lookupChildByName(directory,"existing"))
+    }
+    @Test fun folderNameLookupAfterCacheExpiryFindsExistingFolder() {
+        val folder=create("existing",type=D.MIME_TYPE_DIR)
+        children(directory)
+        Thread.sleep(2100)
+        assertEquals(id(folder),lookupChildByName(directory,"existing"))
+    }
+    @Test fun fullDirectoryQueryNeedsNoLoadingObserver() {
+        create("one"); create("two")
+        resolver.query(DC.buildChildDocumentsUri(AUTHORITY,id(directory)),null,null,null,null)!!.use { cursor ->
+            assertFalse(cursor.extras.getBoolean(DC.EXTRA_LOADING))
+            assertEquals(2,cursor.count)
+            assertNotNull(cursor.notificationUri)
+        }
+    }
+    private fun withFaultProxy(block: (Share,NfsFaultProxy) -> Unit) {
+        NfsFaultProxy(share.host,share.port).use { proxy ->
+            val proxied=share.copy(host="127.0.0.1",port=proxy.port,timeoutSeconds=3)
+            services.shares.save(proxied)
+            try { block(proxied,proxy) }
+            finally { proxy.restore(); services.shares.save(share); services.backend.invalidate(proxied) }
+        }
+    }
+    @Test fun folderLookupRecoversFromDroppedMetadataConnection() {
+        val folder=create("existing",type=D.MIME_TYPE_DIR)
+        withFaultProxy { _,proxy ->
+            resolver.query(directory,null,null,null,null)!!.close() // establish a real NFS session
+            proxy.dropNextExchange()
+            assertEquals(id(folder),lookupChildByName(directory,"existing"))
+            assertEquals(1,proxy.dropped.get())
+            assertEquals("One replacement connection",2,proxy.accepted.get())
+        }
+    }
+    @Test fun expiredListingDuringOutageReportsErrorThenRecovers() {
+        val folder=create("existing",type=D.MIME_TYPE_DIR)
+        withFaultProxy { _,proxy ->
+            assertEquals(id(folder),lookupChildByName(directory,"existing"))
+            Thread.sleep(2100)
+            proxy.blackhole()
+            val start=System.nanoTime()
+            try {
+                lookupChildByName(directory,"existing")
+                fail("A failed query must not return an empty or stale success cursor")
+            } catch(e: IllegalStateException) {
+                assertTrue(e.message.orEmpty(),e.message.orEmpty().contains("NFS errno 110"))
+            }
+            val elapsed=TimeUnit.NANOSECONDS.toMillis(System.nanoTime()-start)
+            android.util.Log.i("NfsSafRecovery","Unanswered metadata query failed after one retry in ${elapsed}ms")
+            assertTrue("Bounded read recovery took ${elapsed}ms",elapsed<15000)
+            assertEquals("At most one reconnect",2,proxy.accepted.get())
+            proxy.restore()
+            assertEquals(id(folder),lookupChildByName(directory,"existing"))
+        }
+    }
+    @Test fun stoppedServiceDoesNotReturnCachedSuccessOrMissingFolder() {
+        create("existing",type=D.MIME_TYPE_DIR)
+        assertNotNull(lookupChildByName(directory,"existing"))
+        ConnectionService.stop(context)
+        val deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(10)
+        while(ConnectionService.status.value!=OperationGate.State.Stopped) {
+            if(System.nanoTime()>deadline) error("Service did not stop")
+            Thread.sleep(20)
+        }
+        try {
+            lookupChildByName(directory,"existing")
+            fail("A stopped service must report an operational error")
+        } catch(e: IllegalStateException) {
+            assertTrue(e.message.orEmpty(),e.message.orEmpty().contains("Start connections"))
+        } finally {
+            ConnectionService.start(context)
+            val restartDeadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(10)
+            while(ConnectionService.status.value!=OperationGate.State.Running) {
+                if(System.nanoTime()>restartDeadline) error("Service did not restart")
+                Thread.sleep(20)
+            }
+        }
+    }
     @Test fun seekSparseTruncateAndAppendModes() {
         val f=create(); write(f,byteArrayOf(1,2,3,4))
         resolver.openFileDescriptor(f,"rw")!!.use { p ->
@@ -109,8 +200,12 @@ class StorageIntegrationTest {
         assertEquals(8,files.map(::id).toSet().size)
         files.forEachIndexed { i,f -> write(f,byteArrayOf(i.toByte())) }
         files.forEachIndexed { i,f -> assertArrayEquals(byteArrayOf(i.toByte()),read(f)) }
-        fails<FileNotFoundException> { DC.renameDocument(resolver,files[1],"same.txt") }
-        assertArrayEquals(byteArrayOf(0),read(files[0]))
+        // Thread submission order does not determine which create wins the
+        // original name. Renaming that winner to itself is a valid no-op.
+        val originalId=children(directory).single { it[D.COLUMN_DISPLAY_NAME]=="same.txt" }[D.COLUMN_DOCUMENT_ID]
+        val contender=files.first { id(it)!=originalId }
+        fails<FileNotFoundException> { DC.renameDocument(resolver,contender,"same.txt") }
+        files.forEachIndexed { i,f -> assertArrayEquals(byteArrayOf(i.toByte()),read(f)) }
     }
     @Test fun treeContainmentAndRootProtection() {
         val child=create("sub",type=D.MIME_TYPE_DIR); val file=create(parent=child)

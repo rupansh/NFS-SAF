@@ -27,6 +27,7 @@ object core extends KotlinModule {
     val valid = Task.dest / "Valid.kt"
     os.write(valid, """import dev.nfssaf.core.*
 fun valid(f: FileHandle<ReadWriteAccess>) { f.read(0, 1, ByteArray(1)); f.write(0, 1, ByteArray(1)); f.fsync() }
+fun metadata(r: MetadataReads) { r.run { it.stat(RemotePath.Root); it.list(RemotePath.Root) } }
 """)
     def check(source: os.Path) = os.proc("java", "-cp", compiler,
       "org.jetbrains.kotlin.cli.jvm.K2JVMCompiler", "-no-stdlib", "-no-reflect",
@@ -37,7 +38,9 @@ fun valid(f: FileHandle<ReadWriteAccess>) { f.read(0, 1, ByteArray(1)); f.write(
       "fun bad(f: FileHandle<ReadAccess>) { f.write(0, 1, ByteArray(1)) }",
       "fun bad(f: FileHandle<WriteAccess>) { f.read(0, 1, ByteArray(1)) }",
       "fun file(f: Node.File) {}\nfun bad(d: Node.Directory) { file(d) }",
-      "fun share(id: ShareId) {}\nfun bad(id: DocumentId) { share(id) }"
+      "fun share(id: ShareId) {}\nfun bad(id: DocumentId) { share(id) }",
+      "fun bad(r: MetadataReads) { r.run { it.mkdir(RemotePath.Root) } }",
+      "fun bad(r: MetadataReads) { r.run { it.remove(RemotePath.Root, true) } }"
     )
     for ((code, i) <- badCases.zipWithIndex) {
       val source = Task.dest / s"Invalid$i.kt"
@@ -45,7 +48,7 @@ fun valid(f: FileHandle<ReadWriteAccess>) { f.read(0, 1, ByteArray(1)); f.write(
       val result = check(source)
       require(result.exitCode != 0 && result.err.text().contains("error:"), s"Contract $i unexpectedly compiled")
     }
-    Task.log.info("PASS: valid capabilities compile; four invalid contracts are rejected")
+    Task.log.info("PASS: valid capabilities compile; six invalid contracts are rejected")
   }
   object test extends KotlinTests, TestModule.Junit4 {
     def junit4Version = "4.13.2"

@@ -17,6 +17,10 @@ Preserve the supplied `docs/logo.svg`; regenerate adaptive icon resources with
   Android can hold the global vold lock while opening a proxy.
 - Preserve errno, handle short transfers/EOF/64-bit offsets, commit on fsync,
   never silently retry uncertain mutations, and never report failed writes as success.
+- Directory queries return complete snapshots, not empty loading cursors. Keep
+  cache loads coalesced and bounded; invalidate detached completions safely.
+  Only capability-restricted metadata reads may retry once after transport
+  failure. Preserve timeout versus cancellation and operational versus missing-file errors.
 - Document IDs are opaque and persistent. Root IDs are share UUIDs. Guard root
   deletion, tree boundaries, replacement identity, path traversal and symlinks.
 - Do not introduce whole-file staging, unbounded pools, recursive background

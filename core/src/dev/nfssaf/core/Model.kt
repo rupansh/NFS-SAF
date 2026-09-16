@@ -89,7 +89,7 @@ class LeasePool<T : AutoCloseable>(private val limit: Int, private val create: (
         failure?.let { throw it }
     }
 }
-class Lease<T>(val value: T, private val release: (Boolean) -> Unit) : AutoCloseable {
+class Lease<out T>(val value: T, private val release: (Boolean) -> Unit) : AutoCloseable {
     private val released = java.util.concurrent.atomic.AtomicBoolean()
     var reusable = true
     override fun close() { if (released.compareAndSet(false, true)) release(reusable) }

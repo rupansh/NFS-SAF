@@ -22,7 +22,7 @@ internal object NativeBridge {
     external fun rename(session: Long, from: String, to: String)
 }
 
-internal class NativeSession(private val share: Share) : AutoCloseable {
+internal class NativeSession(private val share: Share) : AutoCloseable, MetadataReader {
     private sealed interface State {
         data class Connected(val pointer: Long) : State
         data object Closed : State
@@ -34,8 +34,8 @@ internal class NativeSession(private val share: Share) : AutoCloseable {
         is State.Connected -> block(s.pointer)
         State.Closed -> throw NfsException(9,"Connection is closed")
     }
-    fun stat(path: RemotePath) = useNative { NativeBridge.stat(it,path.value) }
-    fun list(path: RemotePath) = useNative { NativeBridge.list(it,path.value).toList() }
+    override fun stat(path: RemotePath) = useNative { NativeBridge.stat(it,path.value) }
+    override fun list(path: RemotePath) = useNative { NativeBridge.list(it,path.value).toList() }
     fun mkdir(path: RemotePath) = useNative { NativeBridge.mkdir(it,path.value) }
     fun remove(path: RemotePath, directory: Boolean) = useNative { NativeBridge.remove(it,path.value,directory) }
     fun rename(from: RemotePath, to: RemotePath) = useNative { NativeBridge.rename(it,from.value,to.value) }
@@ -106,10 +106,19 @@ internal class NfsBackend {
     fun invalidate(share: Share) { pools.remove(share)?.close() }
     fun <T> metadata(share: Share, action: (NativeSession) -> T): T = gate.enter().use { pools(share).metadata.acquire().use { lease ->
         try { action(lease.value) } catch(t: NfsException) {
-            if(t.errno in setOf(5, 104, 110, 116)) lease.reusable=false
+            if(t.isTransportFailure || t.errno==116) lease.reusable=false
             throw t
         }
     } }
+    fun <T> readMetadata(share: Share, read: (MetadataReader) -> T): T = gate.enter().use {
+        MetadataReads(acquire = {
+            // A stop can begin during the first attempt. Do not reconnect while draining.
+            if(gate.state()!=OperationGate.State.Running) throw NfsException(107,"Connections are stopping. Open NFS SAF and start connections again.")
+            pools(share).metadata.acquire()
+        }, onRetry = { error ->
+            android.util.Log.w("NfsSaf", "Metadata connection failed (errno=${error.errno}); discarded session, retrying once")
+        }).run(read)
+    }
     fun open(share: Share, node: Node.File, mode: OpenMode): OpenedFile = gate.enter().use {
         if(share.readOnly && mode.writable) throw NfsException(30,"Share is read-only")
         val lease=pools(share).files.acquire()

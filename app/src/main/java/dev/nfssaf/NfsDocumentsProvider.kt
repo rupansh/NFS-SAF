@@ -14,24 +14,15 @@ import android.webkit.MimeTypeMap
 import dev.nfssaf.core.*
 import java.io.FileNotFoundException
 import java.util.Locale
-import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 
 class NfsDocumentsProvider : DocumentsProvider() {
     private val services get() = Services.get(context!!)
-    private val queries=Executors.newFixedThreadPool(4)
-    private sealed interface Listing {
-        class Loading : Listing
-        data class Ready(val nodes: List<Node>, val time: Long) : Listing
-        data class Failed(val message: String, val time: Long) : Listing
-    }
-    private val listings=object : LinkedHashMap<DocumentId,Listing>(32,0.75f,true) {
-        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<DocumentId,Listing>) = size > 32
-    }
+    private val listings=SnapshotCache<Pair<Share,DocumentId>,List<Node>>(32,2000,SystemClock::elapsedRealtime)
     override fun onCreate() = true
     private fun root(share: Share) = Node.Directory(DocumentId(share.id.value),share.id,RemotePath.Root,Entry(share.name,0,0,0x4000,0,0))
     private fun locate(id: DocumentId): Node = services.shares.all().firstOrNull { it.id.value==id.value }?.let(::root) ?: services.catalog.find(id)
-    private fun refresh(node: Node, session: NativeSession): Node {
+    private fun refresh(node: Node, session: MetadataReader): Node {
         val e=session.stat(node.path)
         if(node.path!=RemotePath.Root && (e.inode!=node.entry.inode || e.device!=node.entry.device)) {
             services.catalog.forget(node.share,node.path).forEach { revokeDocumentPermission(it.value) }
@@ -41,6 +32,20 @@ class NfsDocumentsProvider : DocumentsProvider() {
     }
     private inline fun <T> documentCall(block: () -> T): T = try { block() } catch(e: NfsException) {
         throw FileNotFoundException(ConnectionProblem.from(e).message).apply { initCause(e) }
+    }
+    private inline fun <T> queryCall(block: () -> T): T = try { block() } catch(e: NfsException) {
+        if(e.errno==4 || e.errno==125) throw OperationCanceledException("NFS query was cancelled").apply { initCause(e) }
+        // DocumentsProvider swallows FileNotFoundException into a null cursor.
+        // Use an IPC-supported exception for operational failures so clients
+        // cannot interpret a timeout or stopped service as a missing document.
+        if(e.isTransportFailure || e.errno==107 || e.errno==24) {
+            android.util.Log.w("NfsSaf", "Document query failed (errno=${e.errno})")
+            throw IllegalStateException("${ConnectionProblem.from(e).message} (NFS errno ${e.errno})",e)
+        }
+        throw FileNotFoundException(ConnectionProblem.from(e).message).apply { initCause(e) }
+    } catch(e: InterruptedException) {
+        Thread.currentThread().interrupt()
+        throw OperationCanceledException("Directory query was interrupted").apply { initCause(e) }
     }
     override fun queryRoots(projection: Array<out String>?): Cursor {
         val columns=projection ?: ROOT_COLUMNS
@@ -58,39 +63,27 @@ class NfsDocumentsProvider : DocumentsProvider() {
             setNotificationUri(context!!.contentResolver,DocumentsContract.buildRootsUri(AUTHORITY))
         }
     }
-    override fun queryDocument(documentId: String, projection: Array<out String>?): Cursor = documentCall {
+    override fun queryDocument(documentId: String, projection: Array<out String>?): Cursor = queryCall {
         val node=locate(DocumentId(documentId)); val share=services.shares.get(node.share)
-        val current=services.backend.metadata(share) { refresh(node,it) }
+        val current=services.backend.readMetadata(share) { refresh(node,it) }
         cursor(projection,listOf(current),share)
     }
-    override fun queryChildDocuments(parentDocumentId: String, projection: Array<out String>?, sortOrder: String?): Cursor = documentCall {
+    override fun queryChildDocuments(parentDocumentId: String, projection: Array<out String>?, sortOrder: String?): Cursor = queryCall {
         val id=DocumentId(parentDocumentId)
         val node=locate(id) as? Node.Directory ?: throw NfsException(20,"Not a directory")
         val share=services.shares.get(node.share)
-        val state=synchronized(listings) {
-            val old=listings[id]
-            val now=SystemClock.elapsedRealtime()
-            val stale=old==null || (old is Listing.Ready && now-old.time>2000) || (old is Listing.Failed && now-old.time>5000)
-            if(stale) {
-                val pending=Listing.Loading()
-                listings[id]=pending
-                queries.execute {
-                    val result=try {
-                        val nodes=services.backend.metadata(share) { s -> refresh(node,s); services.catalog.registerChildren(node.share,node.path,s.list(node.path)) }
-                        Listing.Ready(nodes,SystemClock.elapsedRealtime())
-                    } catch(t: Exception) { Listing.Failed(ConnectionProblem.from(t).message,SystemClock.elapsedRealtime()) }
-                    synchronized(listings) { if(listings[id] === pending) listings[id]=result }
-                    context!!.contentResolver.notifyChange(DocumentsContract.buildChildDocumentsUri(AUTHORITY,id.value),null)
+        val nodes=services.backend.gate.enter().use {
+            listings.get(share to id) {
+                services.backend.readMetadata(share) { s ->
+                    refresh(node,s)
+                    services.catalog.registerChildren(node.share,node.path,s.list(node.path))
                 }
-                pending
-            } else old!!
-        }
-        val nodes=if(state is Listing.Ready) sorted(state.nodes,sortOrder) else emptyList()
-        cursor(projection,nodes,share).apply {
-            extras=Bundle().apply {
-                putBoolean(DocumentsContract.EXTRA_LOADING,state is Listing.Loading)
-                if(state is Listing.Failed) putString(DocumentsContract.EXTRA_ERROR,state.message)
             }
+        }
+        // Name-resolution clients may ignore EXTRA_LOADING, and an observer
+        // registered after completion can miss its notification. Return a full
+        // snapshot on the query worker instead of an empty placeholder cursor.
+        cursor(projection,sorted(nodes,sortOrder),share).apply {
             setNotificationUri(context!!.contentResolver,DocumentsContract.buildChildDocumentsUri(AUTHORITY,parentDocumentId))
         }
     }
@@ -132,12 +125,21 @@ class NfsDocumentsProvider : DocumentsProvider() {
         services.shares.get(parent.share)
         parent is Node.Directory && parent.share==child.share && parent.path.contains(child.path)
     }
-    override fun findDocumentPath(parentDocumentId: String?, childDocumentId: String): DocumentsContract.Path = documentCall {
+    override fun findDocumentPath(parentDocumentId: String?, childDocumentId: String): DocumentsContract.Path = queryCall {
         val child=locate(DocumentId(childDocumentId)); val share=services.shares.get(child.share)
         val parent=parentDocumentId?.let { locate(DocumentId(it)) } ?: root(share)
         if(parent !is Node.Directory || parent.share!=child.share || !parent.path.contains(child.path)) throw NfsException(2,"Document is outside the tree")
-        val ids=mutableListOf(child.id.value); var path=child.path
-        services.backend.metadata(share) { s -> while(path!=parent.path) { path=path.parent; ids.add(if(path==RemotePath.Root) share.id.value else services.catalog.register(share.id,path,s.stat(path)).id.value) } }
+        val ids=mutableListOf(child.id.value)
+        services.backend.readMetadata(share) { s ->
+            // Build per-attempt state so a retried walk cannot append partial IDs twice.
+            val parents=mutableListOf<String>()
+            var current=child.path
+            while(current!=parent.path) {
+                current=current.parent
+                parents.add(if(current==RemotePath.Root) share.id.value else services.catalog.register(share.id,current,s.stat(current)).id.value)
+            }
+            parents
+        }.let { ids.addAll(it) }
         DocumentsContract.Path(if(parentDocumentId==null) share.id.value else null,ids.reversed())
     }
     override fun createDocument(parentDocumentId: String, mimeType: String, displayName: String): String = documentCall {
@@ -192,7 +194,7 @@ class NfsDocumentsProvider : DocumentsProvider() {
     }
     private fun requireWritable(share: Share) { if(share.readOnly) throw NfsException(30,"Share is read-only") }
     private fun changed(node: Node) {
-        synchronized(listings) { listings.clear() }
+        listings.clear()
         context!!.contentResolver.notifyChange(DocumentsContract.buildDocumentUri(AUTHORITY,node.id.value),null)
         // Notify observers of every known parent cursor; descendants can have changed as well.
         context!!.contentResolver.notifyChange(DocumentsContract.buildRootsUri(AUTHORITY),null)
