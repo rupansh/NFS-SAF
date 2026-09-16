@@ -27,7 +27,7 @@ git submodule update --init --recursive
 export ANDROID_HOME="$HOME/Android/Sdk"
 "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
   'platforms;android-36' 'build-tools;36.1.0' 'ndk;29.0.14206865' 'platform-tools'
-./mill core.test + native.test
+./mill core.test + core.contractCheck + native.test
 ./mill app.androidApk
 ```
 
@@ -58,6 +58,10 @@ out/native/host.dest/storage_tests SERVER /EXPORT 42 95
 ```
 
 Android test instructions and measured results are recorded in `docs/testing.md`.
+The test APK includes unmodified upstream FreeBSD **fsx**, adapted to both SAF
+descriptors and typed JNI handles: six seeded runs of 10,000 operations, plus
+an injected-corruption check. It is not bundled into the application APK.
 See `docs/architecture.md` for SAF contracts, lifecycle and explicit limitations.
 
-Source: MIT. Bundled libnfs: LGPL-2.1-or-later; see `THIRD_PARTY.md`.
+Application source: MIT. Bundled libnfs: LGPL-2.1-or-later. Upstream test code
+retains its own license; see `THIRD_PARTY.md`.

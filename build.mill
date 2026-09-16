@@ -21,6 +21,32 @@ object androidSdk extends AndroidSdkModule {
 object core extends KotlinModule {
   def kotlinVersion = "2.1.20"
   override def kotlincOptions = Seq("-jvm-target", "17")
+  def contractCheck() = Task.Command {
+    val cp = runClasspath().filter(p => os.exists(p.path)).map(_.path.toString).mkString(java.io.File.pathSeparator)
+    val compiler = kotlinCompilerClasspath().map(_.path.toString).mkString(java.io.File.pathSeparator)
+    val valid = Task.dest / "Valid.kt"
+    os.write(valid, """import dev.nfssaf.core.*
+fun valid(f: FileHandle<ReadWriteAccess>) { f.read(0, 1, ByteArray(1)); f.write(0, 1, ByteArray(1)); f.fsync() }
+""")
+    def check(source: os.Path) = os.proc("java", "-cp", compiler,
+      "org.jetbrains.kotlin.cli.jvm.K2JVMCompiler", "-no-stdlib", "-no-reflect",
+      "-classpath", cp, "-d", (Task.dest / "classes").toString, source.toString).call(check = false, stdout = os.Pipe, stderr = os.Pipe)
+    val good = check(valid)
+    require(good.exitCode == 0, good.err.text())
+    val badCases = Seq(
+      "fun bad(f: FileHandle<ReadAccess>) { f.write(0, 1, ByteArray(1)) }",
+      "fun bad(f: FileHandle<WriteAccess>) { f.read(0, 1, ByteArray(1)) }",
+      "fun file(f: Node.File) {}\nfun bad(d: Node.Directory) { file(d) }",
+      "fun share(id: ShareId) {}\nfun bad(id: DocumentId) { share(id) }"
+    )
+    for ((code, i) <- badCases.zipWithIndex) {
+      val source = Task.dest / s"Invalid$i.kt"
+      os.write(source, "import dev.nfssaf.core.*\n" + code)
+      val result = check(source)
+      require(result.exitCode != 0 && result.err.text().contains("error:"), s"Contract $i unexpectedly compiled")
+    }
+    Task.log.info("PASS: valid capabilities compile; four invalid contracts are rejected")
+  }
   object test extends KotlinTests, TestModule.Junit4 {
     def junit4Version = "4.13.2"
   }
@@ -51,6 +77,24 @@ object native extends Module {
     PathRef(Task.dest / "lib")
   }
 }
+object filesystemTests extends Module {
+  def sources = Task.Sources(mill.api.BuildCtx.workspaceRoot / "tests/fsx")
+  def android = Task {
+    sources()
+    val ndk = os.Path(Task.env("ANDROID_HOME")) / "ndk" / androidSdk.ndkVersion()
+    for (abi <- Seq("arm64-v8a", "x86_64")) {
+      val dest = Task.dest / abi
+      os.proc("cmake", "-S", (mill.api.BuildCtx.workspaceRoot / "tests/fsx").toString,
+        "-B", dest.toString, "-G", "Ninja",
+        s"-DCMAKE_TOOLCHAIN_FILE=$ndk/build/cmake/android.toolchain.cmake",
+        s"-DANDROID_ABI=$abi", "-DANDROID_PLATFORM=android-28",
+        "-DCMAKE_BUILD_TYPE=Release").call(stdout = os.Inherit)
+      os.proc("cmake", "--build", dest.toString).call(stdout = os.Inherit)
+      os.copy(dest / "libfsx.so", Task.dest / "lib" / abi / "libfsx.so", createFolders = true)
+    }
+    PathRef(Task.dest / "lib")
+  }
+}
 object app extends AndroidAppKotlinModule {
   def kotlinVersion = "2.1.20"
   def androidSdkModule = mill.api.ModuleRef(androidSdk)
@@ -71,6 +115,9 @@ object app extends AndroidAppKotlinModule {
     mvn"androidx.compose.ui:ui",
     mvn"org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2"
   )
+  override def androidPackageableNativeDeps = Task {
+    super.androidPackageableNativeDeps().filter(p => Set("arm64-v8a", "x86_64").contains(p.destination.last))
+  }
   override def androidPackageableExtraFiles = Task {
     val root = native.android().path
     super.androidPackageableExtraFiles() ++ os.walk(root).filter(_.ext == "so").map(p =>
@@ -80,5 +127,13 @@ object app extends AndroidAppKotlinModule {
     override def kotlinUseEmbeddableCompiler = Task { true }
     override def androidEnableCompose = true
     def mvnDeps = Seq(mvn"junit:junit:4.13.2", mvn"androidx.test:runner:1.6.2", mvn"androidx.test.ext:junit:1.2.1")
+    override def androidPackageableNativeDeps = Task {
+      super.androidPackageableNativeDeps().filter(p => Set("arm64-v8a", "x86_64").contains(p.destination.last))
+    }
+    override def androidPackageableExtraFiles = Task {
+      val root = filesystemTests.android().path
+      super.androidPackageableExtraFiles() ++ os.walk(root).filter(_.ext == "so").map(p =>
+        AndroidPackageableExtraFile(PathRef(p), os.RelPath("lib") / p.relativeTo(root)))
+    }
   }
 }

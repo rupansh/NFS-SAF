@@ -23,7 +23,7 @@ Read `docs/architecture.md` for contracts and limitations before changing storag
   NFS RENAME for a destination which might already exist.
 
 ## Verification and workflow
-- `./mill core.test + native.test` tests deterministic core and native contracts.
+- `./mill core.test + core.contractCheck + native.test` checks runtime and compile-time contracts.
 - `./mill app.androidApk + app.androidTest.androidTestApk` builds Android artifacts.
 - Integration tests may only mutate newly created `.nfssaf-test-*` directories
   on an explicitly supplied export. Never traverse/delete unrelated test data.
@@ -31,6 +31,8 @@ Read `docs/architecture.md` for contracts and limitations before changing storag
   without discussing the concrete required change with the user.
 - Keep timings reproducible: record protocol, path, payload, transport and cache
   conditions. Emulator throughput is not physical-device Wi-Fi throughput.
+- Preserve upstream fsx unchanged; adapt the transport in `tests/fsx/bridge.c`
+  and instrumentation. Record exclusions and retain the corruption detection test.
 - Lookup primary documentation when unsure. Ask the user if specific required
   documentation cannot be found.
 - Commit appropriate tested checkpoints (authorized by the user). Do not push.

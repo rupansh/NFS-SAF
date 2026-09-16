@@ -12,6 +12,9 @@
 - Kotlin and kotlinx.coroutines: Apache-2.0, JetBrains and contributors.
 - Mill: MIT, https://github.com/com-lihaoyi/mill. `mill` is its pinned launcher.
 - JUnit (tests): EPL-1.0.
+- FreeBSD fsx (test APK only): APSL-2.0, Apple and contributors. Unmodified
+  source, pinned provenance and license are in `tests/fsx/vendor` and
+  `tests/fsx/README.md`. It is not included in the application APK.
 
 RSAF was consulted for architecture and platform gotchas; no RSAF code is
 included. RSAF itself is GPL-3.0-only.

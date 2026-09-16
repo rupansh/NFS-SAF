@@ -1,0 +1,2 @@
+# Preserve byte-for-byte upstream test sources, including historical whitespace.
+tests/fsx/vendor/* -whitespace
