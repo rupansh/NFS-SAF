@@ -147,6 +147,7 @@ class MainActivity : ComponentActivity() {
                 }
             }
             Text("NFS uses your network or VPN. UID and GID identify the server account; no Android storage permission is needed.",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(Modifier.height(80.dp))
         }
     }
     removing?.let { share -> AlertDialog(onDismissRequest={ removing=null },title={ Text("Remove ${share.name}?") },text={ Text("Your files stay on the server. Apps will need to select this connection again if you add it back.") },confirmButton={ TextButton(onClick={

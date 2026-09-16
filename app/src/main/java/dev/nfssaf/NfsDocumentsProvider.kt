@@ -51,7 +51,7 @@ class NfsDocumentsProvider : DocumentsProvider() {
                 Root.COLUMN_TITLE -> s.name
                 Root.COLUMN_SUMMARY -> "${s.host} · ${s.protocol.label}"
                 Root.COLUMN_FLAGS -> Root.FLAG_SUPPORTS_IS_CHILD or (if(s.readOnly) 0 else Root.FLAG_SUPPORTS_CREATE)
-                Root.COLUMN_ICON -> dev.nfssaf.R.drawable.ic_storage
+                Root.COLUMN_ICON -> dev.nfssaf.R.mipmap.ic_launcher
                 Root.COLUMN_MIME_TYPES -> "*/*"
                 else -> null
             } }) }

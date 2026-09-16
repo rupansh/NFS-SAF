@@ -3,6 +3,8 @@
 Build with the pinned `./mill`; do not add Gradle. Kotlin/Compose Material 3 is the
 Android front end; pinned `vendor/libnfs` supplies NFS 3, 4.0 and 4.2 through JNI.
 Read `docs/architecture.md` for contracts and limitations before changing storage.
+Preserve the supplied `logo.svg`; regenerate adaptive icon resources with
+`python3 scripts/generate-icons.py` instead of editing generated path data.
 
 ## Contracts
 - Prefer sealed sum types, validated value types and generic capability bounds.

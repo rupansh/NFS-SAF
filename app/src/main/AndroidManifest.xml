@@ -5,7 +5,7 @@
     <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
-    <application android:label="NFS SAF" android:theme="@style/AppTheme" android:allowBackup="false" android:supportsRtl="true" android:icon="@drawable/ic_storage" android:extractNativeLibs="true">
+    <application android:label="NFS SAF" android:theme="@style/AppTheme" android:allowBackup="false" android:supportsRtl="true" android:icon="@mipmap/ic_launcher" android:extractNativeLibs="true">
         <activity android:name=".MainActivity" android:exported="true">
             <intent-filter><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.LAUNCHER" /></intent-filter>
         </activity>

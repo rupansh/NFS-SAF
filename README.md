@@ -42,6 +42,12 @@ resolves installed SDK components directly to avoid that upstream issue.
 Native compilation explicitly uses API 28 and 16 KiB ELF segment alignment.
 For Android Studio, generate project metadata with `./mill mill.idea/`.
 
+The adaptive launcher icon is generated from the supplied `logo.svg`; run
+`python3 scripts/generate-icons.py` after updating that source. It has separate
+background/foreground layers and Android 13+ themed-icon support.
+Its vector paths are centered within the circular safe zone described in
+[Android's adaptive-icon guide](https://developer.android.com/develop/ui/compose/system/icon_design_adaptive).
+
 ## Tests
 
 Native unit tests exercise partial reads/writes, EOF, errno and path validation.
